@@ -1,4 +1,4 @@
-"Day2 Git drill"
+"Day2 Git drill(feature)"
 
 "commit 1"
 
