@@ -18,7 +18,7 @@ export const meta: TopicMeta = {
   searchText: '调用栈 任务 微任务 Promise 计时器 渲染机会 长任务',
   hasCode: true,
   interview: {
-    answer: '一轮事件循环执行一个任务，清空全部微任务，再进入可能的渲染阶段。',
+    answer: '事件循环选择并执行一个任务，随后执行微任务检查点；有渲染机会且需要更新时，浏览器会在渲染任务源排入更新渲染任务。',
     followUps: ['为什么微任务会饿死渲染？', 'requestAnimationFrame 在什么时机执行？'],
   },
 };
