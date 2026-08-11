@@ -2,14 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { getAdjacentTopics, getChapterTopics, getTopic, loadTopic, topics } from './registry';
 
 describe('content registry', () => {
-  test('registers the first four sample topics', () => {
+  test('contains exactly eight phase-one sample topics', () => {
+    expect(topics).toHaveLength(8);
     expect(topics.map(topic => topic.slug)).toEqual(expect.arrayContaining([
-      'semantic-accessibility',
-      'stacking-context',
-      'event-loop',
-      'type-narrowing',
+      'render-state-snapshot',
+      'rendering-pipeline',
+      'http-cache',
+      'testing-strategy',
     ]));
-    expect(topics).toHaveLength(4);
   });
 
   test('registers the event loop topic', () => {
@@ -24,6 +24,6 @@ describe('content registry', () => {
 
   test('returns adjacent topics without throwing at boundaries', () => {
     expect(getAdjacentTopics('semantic-accessibility').previous).toBeUndefined();
-    expect(getAdjacentTopics('type-narrowing').next).toBeUndefined();
+    expect(getAdjacentTopics('testing-strategy').next).toBeUndefined();
   });
 });
