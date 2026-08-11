@@ -10,7 +10,7 @@ export const meta: TopicMeta = {
   minutes: 24,
   keywords: ['调用栈', '任务', '微任务', '渲染'],
   prerequisites: [],
-  related: [],
+  related: ['type-narrowing'],
   sources: [
     { label: 'HTML Standard — Event loops', href: 'https://html.spec.whatwg.org/multipage/webappapis.html#event-loops' },
     { label: 'MDN — Microtask guide', href: 'https://developer.mozilla.org/docs/Web/API/HTML_DOM_API/Microtask_guide' },

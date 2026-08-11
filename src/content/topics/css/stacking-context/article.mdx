@@ -1,0 +1,148 @@
+# 层叠上下文与 z-index
+
+## 一句话结论
+
+`z-index` 只在元素所属的层叠上下文中比较。子元素无论写多大的数值，都不能脱离父上下文参与外层排序；排查遮挡时应先找出上下文边界，再比较同一上下文里的层叠顺序。
+
+## 同一层叠上下文里的顺序
+
+浏览器绘制一个层叠上下文时，会按规范规定的类别从后到前组织内容。用于日常排查的简化顺序是：
+
+1. 当前上下文的背景与边框。
+2. `z-index` 为负的定位后代所形成的层叠项。
+3. 普通文档流中的块、浮动元素和行内内容，它们各自仍有规范规定的内部绘制顺序。
+4. 定位且 `z-index: auto` 的元素，以及某些作为整体参与当前上下文的内容。
+5. `z-index` 为 `0` 的子层叠上下文。
+6. `z-index` 为正的子层叠上下文，数值相同时通常按树顺序绘制。
+
+这是一张用于推理的地图，不应被误背成“所有元素只比较 z-index”。`z-index` 的效果取决于元素是否生成层叠盒、所在上下文和所属类别；未定位普通元素上的 `z-index` 在传统情形下不会像定位元素那样参与比较，而 flex/grid item 又有专门规则。
+
+## 哪些条件会创建新上下文
+
+根元素会创建根层叠上下文。常见的新上下文创建条件包括：
+
+- `position: relative | absolute` 且 `z-index` 不是 `auto`；
+- `position: fixed | sticky`；
+- flex 或 grid item 的 `z-index` 不是 `auto`；
+- `opacity` 小于 `1`；
+- `transform`、`filter`、`perspective`、`clip-path`、`mask` 等属性取非初始值；
+- `isolation: isolate`；
+- `will-change` 指向会创建上下文的属性；
+- `contain: layout`、`contain: paint` 或包含这些值的组合；
+- 作为 top layer 成员显示的元素及其相应伪元素。
+
+开发者工具的 computed styles 能帮助定位触发条件。不要为了“保险”给每个组件都写 `transform: translateZ(0)` 或巨大 `z-index`；这会制造更多边界，反而让排序难以预测。
+
+## 为什么 `999999` 也逃不出父级
+
+每个子层叠上下文在父上下文里被当作一个不可拆开的整体。假设左列上下文在根上下文的层级是 `1`，右列是 `2`：左列弹层的 `z-index: 9999` 只让它在左列内部靠前；根上下文比较的仍是“左列 1”和“右列 2”，因此整个左列仍在右列下面。
+
+可以把它类比为版本号：子元素的 `9999` 类似 `1.9999`，无法大于另一个父级里的 `2.0`。这只是帮助理解的比喻，真正规则仍以规范定义的层叠级别和绘制顺序为准。
+
+## 两列复现：错误版本
+
+下面的左列因为 `z-index: 1` 创建上下文，右列以 `z-index: 2` 位于它之上。菜单虽然是 `9999`，仍会被右列覆盖。
+
+```html
+<div class="demo">
+  <section class="column column-left">
+    左列
+    <div class="menu">z-index: 9999 的菜单</div>
+  </section>
+  <section class="column column-right">右列：仍压住菜单</section>
+</div>
+```
+
+```css
+.demo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 560px;
+}
+
+.column {
+  position: relative;
+  min-height: 160px;
+}
+
+.column-left {
+  z-index: 1;
+  background: #dbeafe;
+}
+
+.column-right {
+  z-index: 2;
+  background: #fee2e2;
+}
+
+.menu {
+  position: absolute;
+  z-index: 9999;
+  top: 48px;
+  left: 180px;
+  width: 220px;
+  padding: 16px;
+  background: #172554;
+  color: white;
+}
+```
+
+## 修正版本
+
+如果两列不需要独立层级，最小修复是移除父级多余的 `z-index`，让菜单与遮挡它的内容在同一个根上下文中比较：
+
+```css
+.column-left,
+.column-right {
+  position: relative;
+  z-index: auto;
+}
+
+.menu {
+  position: absolute;
+  z-index: 10;
+}
+```
+
+真实项目里的菜单还可能被祖先的 `overflow: hidden` 裁剪。裁剪和层叠是两个问题：继续增大 `z-index` 既不能逃出父上下文，也不能解除裁剪。若弹层必须跨越组件和滚动容器，可以把它渲染到经过设计的顶层容器（例如 React portal），并通过有限的层级令牌管理 backdrop、popover、toast 等类别。Portal 改变 DOM 祖先后，还要保留合理的焦点管理和可访问名称。
+
+## 层叠上下文不等于合成层
+
+**层叠上下文**是 CSS 规定的绘制与排序原子单位，决定谁盖住谁。**合成层**是浏览器渲染实现为了滚动、动画或重绘性能而选择的内部表面；规范并不保证某条 CSS 一定对应一个独立 GPU 层。
+
+二者有交集：`transform`、`opacity` 等既会创建层叠上下文，也常让浏览器考虑独立合成。但“创建层叠上下文”不等于“必定提升为合成层”，合成策略也可能随浏览器、设备、内存压力和动画状态变化。`will-change` 只是提示，不是层级修复工具；滥用会消耗内存。判断绘制顺序看 CSS/DOM 和层叠上下文，判断性能再用浏览器的 Layers、Rendering 和 Performance 工具验证。
+
+## 项目排查流程
+
+1. 选中被遮挡元素和遮挡元素，确认是否真的发生重叠，并分别沿祖先链查找创建上下文的属性。
+2. 找到两条祖先链首次进入同一上下文的位置，比较在这个共同上下文中的两个层叠项，而不是直接比较最深子元素的数值。
+3. 检查 `overflow`、`clip-path` 是否造成裁剪，检查 top layer 中的 `dialog` 或 popover 是否改变比较空间。
+4. 删除没有职责的上下文；对确实需要的全局层级使用少量语义令牌，例如 `--z-header`、`--z-modal`，避免组件随意竞争五位数。
+5. 用真实交互验证：滚动、sticky header、弹窗嵌套、焦点轮廓和 200% 缩放都可能暴露静态截图看不到的问题。
+
+## 边界与反例
+
+“给元素加 `position: relative` 就会创建层叠上下文”不完整：传统定位元素还需要非 `auto` 的 `z-index`，而 fixed/sticky 是例外。“DOM 后面的元素永远在上面”也只在同一类别、同一上下文且层叠级别相同时才可能成立。
+
+负 `z-index` 不是把元素送到整个页面背景后，它仍受当前上下文边界约束。top layer（如以模态方式打开的 `dialog`）处于普通文档层叠之外，普通 `z-index` 不能盖过它。阴影看似覆盖不代表元素命中测试区域相同，点击问题还需检查 `pointer-events` 和实际盒模型。
+
+## 面试回答
+
+`z-index` 不是全局数值竞赛，而是在当前层叠上下文中决定层叠级别。根元素、带非 `auto` z-index 的定位元素、fixed 或 sticky 元素，以及 `opacity < 1`、`transform`、`filter`、`isolation` 等属性都可能创建新上下文。一个上下文作为整体参与父上下文排序，所以较低父级里的子元素即使写 `z-index: 9999`，也不能越过父上下文中层级更高的兄弟。
+
+排查时我会分别沿遮挡双方的祖先链找层叠上下文，定位它们首次共享的上下文，再比较其中的层叠项；同时区分 `overflow` 裁剪，避免把所有问题都归因于 z-index。若弹层确实要跨组件边界，会移到设计好的顶层容器并使用语义化层级令牌。最后，层叠上下文是 CSS 绘制规则，合成层是浏览器的性能实现，两者可能相关但不能等同，也不应靠 `translateZ(0)` 猜测优化。
+
+## 深度追问
+
+1. **哪些属性容易意外创建上下文？** `opacity < 1`、`transform`、`filter`、`isolation: isolate`、某些 `contain` 与 `will-change` 很常见；定位元素的非 `auto` z-index、fixed/sticky、flex/grid item 也要检查。
+2. **为什么继续增大子元素 z-index 无效？** 因为子上下文整体先由父级参与外层排序；数值只在子上下文内部比较。应调整或移除父级边界，或把浮层移到合适的 DOM 层级。
+3. **它和 GPU 合成层有什么区别？** 前者由 CSS 绘制模型定义，后者是浏览器可变化的实现决策。是否合成要用开发者工具测量，不能从层叠上下文直接推出。
+
+## 关联专题
+
+- [语义化 HTML 与可访问性](/topics/semantic-accessibility)：浮层移到 portal 或 top layer 后，仍需正确维护 DOM 焦点、键盘关闭行为和控件语义。
+
+## 资料来源
+
+- [MDN — Stacking context](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context)
+- [CSS Positioned Layout Module Level 3](https://www.w3.org/TR/css-position-3/)
