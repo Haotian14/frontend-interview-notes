@@ -9,7 +9,7 @@ export const meta: TopicMeta = {
   level: '基础',
   minutes: 20,
   keywords: ['语义化', 'ARIA', '键盘', '表单'],
-  prerequisites: [],
+  prerequisites: [], // 首章基础专题：只要求通用 HTML 基础，无站内前置专题。
   related: ['stacking-context'],
   sources: [
     { label: 'HTML Standard — Semantics', href: 'https://html.spec.whatwg.org/multipage/dom.html#semantics-2' },

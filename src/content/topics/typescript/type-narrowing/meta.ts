@@ -9,7 +9,7 @@ export const meta: TopicMeta = {
   level: '高频',
   minutes: 24,
   keywords: ['unknown', '类型守卫', '可辨识联合', 'never'],
-  prerequisites: [],
+  prerequisites: ['event-loop'],
   related: ['event-loop'],
   sources: [
     { label: 'TypeScript Handbook — Narrowing', href: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html' },

@@ -9,7 +9,7 @@ export const meta: TopicMeta = {
   level: '高频',
   minutes: 24,
   keywords: ['层叠上下文', 'z-index', '定位', '合成层'],
-  prerequisites: [],
+  prerequisites: ['semantic-accessibility'],
   related: ['semantic-accessibility'],
   sources: [
     { label: 'MDN — Stacking context', href: 'https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context' },
