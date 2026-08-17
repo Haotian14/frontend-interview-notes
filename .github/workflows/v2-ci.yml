@@ -1,0 +1,33 @@
+name: V2 Cloud CI
+
+on:
+  push:
+    branches:
+      - agent/frontend-handbook-v2-phase1
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run unit and content tests
+        run: npm test
+      - name: Type-check
+        run: npm run typecheck
+      - name: Build
+        run: npm run build

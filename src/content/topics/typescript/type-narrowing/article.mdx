@@ -1,0 +1,185 @@
+# 类型收窄与穷尽检查
+
+## 一句话结论
+
+类型收窄把“不确定的值”通过真实运行时证据变成当前分支可安全使用的类型。系统边界用 `unknown` 接住输入并验证，内部用可辨识联合表达状态，再用 `never` 穷尽检查保证新增分支不会被静默遗漏。
+
+## 前置知识
+
+请先阅读[事件循环与任务队列](/topics/event-loop)，理解异步请求回调为何在后续任务或微任务中更新状态；它对应元数据中的 `event-loop` 前置专题。本文还默认读者熟悉 JavaScript 基元、对象、class、条件分支，以及 TypeScript 的联合类型和字面量类型。这里关注的不是请求调度顺序，而是异步边界带回的外部值如何经过运行时验证，再安全进入应用状态。
+
+## `unknown` 与 `any`
+
+`any` 基本关闭了类型检查：属性访问、函数调用和赋值都会被放行，错误沿数据流扩散到远离输入的位置。`unknown` 则表示“确实有一个值，但使用前不知道它是什么”；它能接收任意值，却要求先证明类型再读取属性或调用方法。
+
+```ts
+function unsafeLength(value: any) {
+  return value.profile.name.length; // 编译通过，运行时可能在任意一层失败
+}
+
+function safeLength(value: unknown) {
+  if (typeof value === 'string') {
+    return value.length; // value 在此分支被收窄为 string
+  }
+  return 0;
+}
+```
+
+JSON、`postMessage`、localStorage 反序列化值和第三方 API 响应都来自类型系统之外，适合先视为 `unknown`。验证一次并转换为可信领域类型，比把 `any` 传遍应用更容易定位错误。
+
+## 内置守卫与控制流分析
+
+TypeScript 会沿条件、提前返回、赋值和可达性分析变量类型：
+
+```ts
+function format(value: string | number | Date | { label: string }) {
+  if (typeof value === 'string') return value.trim();
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object' && 'label' in value) return value.label;
+  return value.toFixed(2); // 剩余类型是 number
+}
+```
+
+- `typeof` 适合区分 JavaScript 基元以及 `function`，但要记住 `typeof null === 'object'`。
+- `in` 判断属性是否存在于对象或其原型链上；它不能单独证明属性值类型正确，且可选属性可能出现在多个联合成员中。
+- `instanceof` 检查运行时原型链，适合同一 realm 中真实 class 实例。JSON 没有类原型，跨 iframe 的实例也可能不满足预期。
+- 相等性判断和 truthiness 也会收窄，但 `if (value)` 会把空字符串、`0` 等合法值一起排除，不能机械替代显式空值判断。
+
+## 自定义类型谓词必须真的验证
+
+返回类型 `value is User` 会告诉编译器：函数返回 `true` 时，调用者可以把值当作 `User`。编译器不会检查函数体是否足以兑现承诺，因此谓词本身是需要测试和审查的可信边界。
+
+```ts
+type User = {
+  id: string;
+  name: string;
+  active: boolean;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isUser(value: unknown): value is User {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.active === 'boolean';
+}
+
+function parseUser(value: unknown): User {
+  if (!isUser(value)) throw new Error('Invalid user response');
+  return value;
+}
+```
+
+从这里开始，后续片段都沿用同一模块中的 `User`、`isRecord` 和 `isUser` 声明；`id`、`name`、`active` 三个字段都由同一个守卫真实检查。
+
+只检查 `typeof value === 'object'` 就声明 `value is User` 是错误反例：字段可能缺失或类型错误。对于复杂、嵌套或需要错误路径的数据，可使用经过评估的 schema 校验库；关键仍是运行时代码确实检查了静态类型声称的约束。
+
+## 用可辨识联合表达请求状态
+
+把多个互不约束的布尔值写成 `{ loading, hasError, data }` 会允许“加载中且成功且报错”等非法组合。可辨识联合给每个合法状态一个共同的字面量字段，控制流可以据此精确收窄：
+
+```ts
+type RequestState =
+  | { status: 'idle' }
+  | { status: 'loading'; startedAt: number }
+  | { status: 'success'; data: User[] }
+  | { status: 'error'; error: Error; retryable: boolean };
+
+function renderMessage(state: RequestState): string {
+  switch (state.status) {
+    case 'idle':
+      return '尚未请求';
+    case 'loading':
+      return `加载中，开始于 ${state.startedAt}`;
+    case 'success':
+      return `已加载 ${state.data.length} 位用户`;
+    case 'error':
+      return state.retryable ? '加载失败，可以重试' : state.error.message;
+    default:
+      return assertNever(state);
+  }
+}
+```
+
+在 `success` 分支中 `data` 必然存在，在 `error` 分支中 `error` 必然存在。组件不必再写非空断言，也无法构造没有数据的成功状态。
+
+## 用 `never` 做穷尽检查
+
+`never` 表示不可能出现的值。当 switch 已处理联合的所有成员，default 分支中的变量就会收窄为 `never`：
+
+```ts
+function assertNever(value: never): never {
+  throw new Error(`Unexpected request state: ${JSON.stringify(value)}`);
+}
+```
+
+如果后来加入 `{ status: 'cancelled' }` 却忘记处理，`state` 在 default 中不再是 `never`，调用 `assertNever(state)` 会产生编译错误。函数仍然抛出运行时错误，是为了防御旧客户端收到新服务端值、JavaScript 调用方绕过类型或错误断言等静态系统之外的情况。
+
+也可以让函数具有明确返回类型并省略 default 来借助 `noImplicitReturns` 检查，但 `assertNever` 通常能在遗漏位置给出更直接的类型错误，并提供运行时护栏。
+
+## 断言不会验证 API 响应
+
+```ts
+const response = await fetch('/api/user/42');
+const user = (await response.json()) as User;
+console.log(user.name.toUpperCase());
+```
+
+`as User` 不会插入任何运行时代码，不会检查 HTTP 状态、JSON 是否为对象、`name` 是否存在，也不会转换字段。类型断言只告诉编译器“相信我”。响应若是 `{ name: null }`，错误仍会在 `toUpperCase` 处发生。
+
+正确边界应先处理协议错误，再把解析结果当作 `unknown`，并继续用前文同一模块中的 `isUser` 验证：
+
+```ts
+async function fetchUser(id: string): Promise<User> {
+  const response = await fetch(`/api/user/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  const payload: unknown = await response.json();
+  if (!isUser(payload)) throw new Error('User payload does not match schema');
+  return payload;
+}
+```
+
+验证只能证明你实际检查的内容。若 API 的业务约束要求非空 ID、合法日期或枚举范围，守卫也要覆盖这些约束，或者把基础校验后的对象转换为更严格的领域类型。
+
+## 项目应用
+
+一个可维护的数据流可以分成三层：
+
+1. **边界层**把外部数据视为 `unknown`，检查状态码、结构和业务约束，并记录不含敏感信息的诊断。
+2. **领域层**只接受验证后的类型，用可辨识联合表达请求、权限、支付等互斥状态，让非法状态难以构造。
+3. **呈现层**按判别字段渲染，通过 `assertNever` 让新状态在所有消费者处暴露遗漏。
+
+测试守卫时要覆盖正确对象以及 null、数组、缺字段、字段类型错误、额外字段策略和嵌套错误。不要把 `as unknown as T`、非空断言 `!` 当作修复；它们只压掉证据不足的提示。确实需要断言时，应把它限制在范围很小、由不可表达的不变量支持且有注释或测试覆盖的位置。
+
+## 边界与反例
+
+收窄不是永久事实。对象可被别处突变时，检查后到使用前属性仍可能改变；异步边界、可变别名和不可信回调尤其要小心。必要时复制并规范化数据，使用只读类型，或在消费点再次校验关键条件。
+
+`in` 只能证明键存在，不保证 `value.prop` 的值符合目标类型；`instanceof` 不能验证普通 JSON。自定义谓词若撒谎，TypeScript 会相信它。可辨识字段也应使用稳定的字面量值，不能在一个成员中写成宽泛 `status: string`，否则判别能力会丢失。
+
+静态穷尽检查同样不能取代运行时兼容策略：后端可能先发布新枚举，缓存可能包含旧形状。对外部值先验证或提供明确的 unknown fallback，再进入内部穷尽联合，才能同时覆盖发布错位和代码遗漏。
+
+## 面试回答
+
+类型收窄是 TypeScript 根据控制流和运行时判断，把较宽类型缩小到当前分支可安全使用的类型。外部输入应先用 `unknown` 承接，再通过 `typeof`、`in`、`instanceof` 或经过验证的自定义谓词收窄；`any` 会绕过检查，`as` 断言也只改变编译器看法，不能验证 API 响应。
+
+业务状态适合建模为带共同判别字段的可辨识联合，例如用 `status` 区分 loading、success 和 error，使每个分支只暴露自己的字段。switch 后把剩余值交给接收 `never` 的 `assertNever`，新增联合成员但遗漏处理时就会得到编译错误。实践中我会在系统边界做运行时校验，内部使用精确联合和穷尽检查，并测试自定义守卫的反例，因为谓词写错后编译器仍会信任它。
+
+## 深度追问
+
+1. **`unknown` 为什么比 `any` 更适合 API 响应？** 两者都能接收任意值，但 unknown 禁止未经证明的属性访问，迫使校验发生在系统边界；any 会让不安全操作继续传播。
+2. **自定义类型谓词写错有什么风险？** 编译器不验证谓词实现是否充分。一旦它错误返回 true，后续代码会在虚假的静态保证下运行，因此守卫要真实检查每项约束并覆盖反例测试。
+3. **`never` 怎样捕获新增成员？** 所有 case 处理完时剩余值才是 never。新增联合成员后 default 中值变成该成员，无法传给 `assertNever(value: never)`，编译器便在遗漏消费者处报错。
+
+## 关联专题
+
+- [事件循环与任务队列](/topics/event-loop)：异步请求状态在任务和微任务之间变化时，可辨识联合能约束每次状态转换携带的数据。
+
+## 资料来源
+
+- [TypeScript Handbook — Narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html)
+- [TypeScript Handbook — Unions and Intersection Types](https://www.typescriptlang.org/docs/handbook/unions-and-intersections.html)
