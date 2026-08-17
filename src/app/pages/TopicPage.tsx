@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { createElement, lazy, Suspense } from 'react';
 import { MDXProvider } from '@mdx-js/react';
 import { useParams } from 'react-router-dom';
 import TopicLayout from '../../components/content/TopicLayout';
@@ -19,9 +19,9 @@ const articleComponents = new Map(topics.map(topic => [
 export default function TopicPage() {
   const { chapter, topic: topicSlug } = useParams();
   const topic = topicSlug ? getTopic(topicSlug) : undefined;
-  const Article = topic ? articleComponents.get(topic.slug) : undefined;
+  const hasArticle = topic ? articleComponents.has(topic.slug) : false;
 
-  if (!topic || topic.chapter !== chapter || !Article) {
+  if (!topic || topic.chapter !== chapter || !hasArticle) {
     throw new Response('Unknown handbook topic', {
       status: 404,
       statusText: 'Not Found',
@@ -38,7 +38,7 @@ export default function TopicPage() {
     >
       <TopicLayout topic={topic}>
         <MDXProvider components={mdxComponents}>
-          <Article />
+          {createElement(articleComponents.get(topic.slug)!)}
         </MDXProvider>
       </TopicLayout>
     </Suspense>
