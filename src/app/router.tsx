@@ -7,6 +7,7 @@ import HandbookPage from './pages/HandbookPage';
 import HomePage from './pages/HomePage';
 import KnowledgeMapPage from './pages/KnowledgeMapPage';
 import NotFoundPage from './pages/NotFoundPage';
+import TopicPage from './pages/TopicPage';
 
 function createRoutes(): RouteObject[] {
   return [
@@ -29,6 +30,11 @@ function createRoutes(): RouteObject[] {
           path: 'handbook/:chapter',
           element: <ChapterPage />,
           handle: { title: '手册章节' },
+        },
+        {
+          path: 'handbook/:chapter/:topic',
+          element: <TopicPage />,
+          handle: { title: '专题' },
         },
         {
           path: 'knowledge-map',
