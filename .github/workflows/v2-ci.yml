@@ -33,7 +33,22 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Package Sites build
+        run: |
+          mkdir -p .sites-stage/dist/.openai
+          cp -R dist/. .sites-stage/dist/
+          cp .openai/hosting.json .sites-stage/dist/.openai/hosting.json
+          tar -C .sites-stage -czf sites-v2.tar.gz dist
+          tar -tzf sites-v2.tar.gz | grep -qx 'dist/server/index.js'
+          tar -tzf sites-v2.tar.gz | grep -qx 'dist/.openai/hosting.json'
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Run browser smoke tests
         run: npm run test:e2e
+      - name: Upload Sites build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sites-v2-package
+          path: sites-v2.tar.gz
+          if-no-files-found: error
+          retention-days: 1
