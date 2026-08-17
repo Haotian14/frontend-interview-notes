@@ -7,7 +7,6 @@ import HandbookPage from './pages/HandbookPage';
 import HomePage from './pages/HomePage';
 import KnowledgeMapPage from './pages/KnowledgeMapPage';
 import NotFoundPage from './pages/NotFoundPage';
-import TopicPage from './pages/TopicPage';
 
 function createRoutes(): RouteObject[] {
   return [
@@ -33,7 +32,9 @@ function createRoutes(): RouteObject[] {
         },
         {
           path: 'handbook/:chapter/:topic',
-          element: <TopicPage />,
+          lazy: async () => ({
+            Component: (await import('./pages/TopicPage')).default,
+          }),
           handle: { title: '专题' },
         },
         {

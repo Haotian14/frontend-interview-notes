@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { chapters } from '../content/chapters';
-import SearchDialog from '../features/search/SearchDialog';
 import { chapterPath } from './paths';
 import RouteFocus from './RouteFocus';
+
+const SearchDialog = lazy(() => import('../features/search/SearchDialog'));
 
 const primaryLinks = [
   { to: '/handbook', label: '复习手册' },
@@ -135,11 +136,17 @@ export default function AppShell() {
         <p>建立知识体系，也练习如何把它讲清楚。</p>
       </footer>
 
-      <SearchDialog
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        triggerRef={searchTriggerRef}
-      />
+      {searchOpen && (
+        <Suspense
+          fallback={<p className="search-loading" role="status">正在打开搜索…</p>}
+        >
+          <SearchDialog
+            open
+            onClose={() => setSearchOpen(false)}
+            triggerRef={searchTriggerRef}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

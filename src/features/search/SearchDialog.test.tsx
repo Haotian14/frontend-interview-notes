@@ -20,7 +20,7 @@ describe('SearchDialog', () => {
     trigger.focus();
 
     await user.keyboard('/');
-    expect(screen.getByRole('dialog', { name: '搜索手册' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: '搜索手册' })).toBeInTheDocument();
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: '搜索手册' })).not.toBeInTheDocument();
@@ -46,7 +46,7 @@ describe('SearchDialog', () => {
     const router = renderApp();
     await user.click(screen.getByRole('button', { name: '搜索手册' }));
 
-    const input = screen.getByRole('combobox', { name: '搜索知识点' });
+    const input = await screen.findByRole('combobox', { name: '搜索知识点' });
     await user.type(input, '渲染');
 
     const results = searchTopics('渲染');
@@ -71,7 +71,7 @@ describe('SearchDialog', () => {
     renderApp();
     await user.click(screen.getByRole('button', { name: '搜索手册' }));
 
-    const dialog = screen.getByRole('dialog', { name: '搜索手册' });
+    const dialog = await screen.findByRole('dialog', { name: '搜索手册' });
     const input = screen.getByRole('combobox', { name: '搜索知识点' });
     await user.type(input, '渲染');
 
