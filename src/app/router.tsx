@@ -2,10 +2,7 @@ import type { RouteObject } from 'react-router-dom';
 import { createBrowserRouter, createMemoryRouter } from 'react-router-dom';
 import AppShell from './AppShell';
 import RootErrorBoundary from './RootErrorBoundary';
-import ChapterPage from './pages/ChapterPage';
-import HandbookPage from './pages/HandbookPage';
 import HomePage from './pages/HomePage';
-import KnowledgeMapPage from './pages/KnowledgeMapPage';
 import NotFoundPage from './pages/NotFoundPage';
 
 function createRoutes(): RouteObject[] {
@@ -22,12 +19,16 @@ function createRoutes(): RouteObject[] {
         },
         {
           path: 'handbook',
-          element: <HandbookPage />,
+          lazy: async () => ({
+            Component: (await import('./pages/HandbookPage')).default,
+          }),
           handle: { title: '完整手册目录' },
         },
         {
           path: 'handbook/:chapter',
-          element: <ChapterPage />,
+          lazy: async () => ({
+            Component: (await import('./pages/ChapterPage')).default,
+          }),
           handle: { title: '手册章节' },
         },
         {
@@ -39,7 +40,9 @@ function createRoutes(): RouteObject[] {
         },
         {
           path: 'knowledge-map',
-          element: <KnowledgeMapPage />,
+          lazy: async () => ({
+            Component: (await import('./pages/KnowledgeMapPage')).default,
+          }),
           handle: { title: '知识地图' },
         },
         {
