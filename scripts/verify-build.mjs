@@ -1,6 +1,7 @@
 import { gzipSync } from 'node:zlib';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import { stdout } from 'node:process';
 
 const html = await readFile('dist/index.html', 'utf8');
 const initialFiles = new Set();
@@ -56,6 +57,6 @@ for (const file of sourceFiles) {
   if (violation) throw new Error(`${file} 包含禁止行为：${violation}`);
 }
 
-console.log(`Initial JavaScript gzip: ${initialGzipBytes} bytes`);
-console.log(`Social image: ${socialImage.size} bytes`);
-console.log('Forbidden behavior scan: PASS');
+stdout.write(`Initial JavaScript gzip: ${initialGzipBytes} bytes\n`);
+stdout.write(`Social image: ${socialImage.size} bytes\n`);
+stdout.write('Forbidden behavior scan: PASS\n');
