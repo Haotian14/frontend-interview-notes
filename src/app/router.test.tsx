@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { RouterProvider } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { getChapterTopics, topics } from '../content/registry';
@@ -47,7 +47,9 @@ describe('application routes', () => {
     const { router, unmount } = await renderRoute('/');
     await screen.findByRole('heading', { name: '前端工程师系统复习手册' });
 
-    await router.navigate('/knowledge-map');
+    await act(async () => {
+      await router.navigate('/knowledge-map');
+    });
 
     const heading = await screen.findByRole('heading', { name: '知识地图' });
     await waitFor(() => {
@@ -55,5 +57,18 @@ describe('application routes', () => {
       expect(heading).toHaveFocus();
     });
     unmount();
+  });
+
+  test('opens and reloads a topic at the same stable URL', async () => {
+    const path = '/handbook/javascript-async/event-loop';
+    const first = await renderRoute(path);
+    expect(await screen.findByRole('heading', { level: 1, name: '事件循环与任务队列' }))
+      .toBeInTheDocument();
+    first.unmount();
+
+    const reloaded = await renderRoute(path);
+    expect(await screen.findByRole('heading', { level: 1, name: '事件循环与任务队列' }))
+      .toBeInTheDocument();
+    reloaded.unmount();
   });
 });
