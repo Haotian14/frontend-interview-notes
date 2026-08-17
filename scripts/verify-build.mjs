@@ -35,8 +35,14 @@ const sourceFiles = [];
 async function collect(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) await collect(path);
-    else if (['.ts', '.tsx', '.css'].includes(extname(entry.name))) sourceFiles.push(path);
+    if (entry.isDirectory()) {
+      await collect(path);
+    } else {
+      const isTestFile = /\.(?:test|spec)\.[^.]+$/.test(entry.name);
+      if (!isTestFile && ['.ts', '.tsx', '.css'].includes(extname(entry.name))) {
+        sourceFiles.push(path);
+      }
+    }
   }
 }
 
