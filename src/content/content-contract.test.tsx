@@ -3,6 +3,7 @@ import { MDXProvider } from '@mdx-js/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { mdxComponents } from '../mdx-components';
+import { topicCatalog } from './catalog';
 import { loadTopic, topics } from './registry';
 
 const requiredHeadings = [
@@ -16,8 +17,15 @@ const requiredHeadings = [
 ];
 
 describe('phase-one content contract', () => {
-  test('contains exactly eight sample topics', () => {
+  test('contains exactly eight sample topics and a synchronized lightweight catalog', () => {
     expect(topics).toHaveLength(8);
+    expect(topicCatalog).toEqual(topics.map(topic => ({
+      slug: topic.slug,
+      chapter: topic.chapter,
+      title: topic.title,
+      level: topic.level,
+      minutes: topic.minutes,
+    })));
   });
 
   test('uses valid topic relationships and HTTPS sources', () => {

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { chapters } from '../../content/chapters';
-import { topics } from '../../content/registry';
+import { topicCatalog } from '../../content/catalog';
 import { chapterPath, topicPath } from '../paths';
 
 const readingPaths = [
@@ -64,7 +64,7 @@ export default function HomePage() {
         <p>03 / SAMPLE TOPICS</p>
         <h2 id="sample-heading">八篇样板专题</h2>
         <ul>
-          {topics.map(topic => (
+          {topicCatalog.map(topic => (
             <li key={topic.slug}>
               <Link to={topicPath(topic)}>{topic.title}</Link>
               <span>{topic.level} · {topic.minutes} 分钟</span>
