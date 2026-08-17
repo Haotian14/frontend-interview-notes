@@ -104,7 +104,7 @@ describe('TopicLayout', () => {
     const heading = screen.getByRole('heading', { level: 3, name: '渲染时机' });
     act(() => {
       intersectionCallback([
-        { target: heading, isIntersecting: true } as IntersectionObserverEntry,
+        { target: heading, isIntersecting: true } as unknown as IntersectionObserverEntry,
       ], observer);
     });
 
