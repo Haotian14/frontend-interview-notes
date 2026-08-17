@@ -13,6 +13,21 @@ const primaryLinks = [
   { to: '/reference', label: '资料索引' },
 ];
 
+function ChapterLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <ol>
+      {chapters.map(chapter => (
+        <li key={chapter.id}>
+          <NavLink to={chapterPath(chapter.id)} onClick={onNavigate}>
+            <span>{String(chapter.index).padStart(2, '0')}</span>
+            <span>{chapter.title}</span>
+          </NavLink>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -97,18 +112,17 @@ export default function AppShell() {
         </button>
       </header>
 
+      <aside className="chapter-sidebar">
+        <p>CHAPTER LEDGER / 01—10</p>
+        <nav aria-label="章节导航">
+          <ChapterLinks />
+        </nav>
+      </aside>
+
       {menuOpen && (
         <nav id="mobile-chapter-menu" aria-label="移动章节导航">
-          <p>按知识模块浏览</p>
-          <ol>
-            {chapters.map(chapter => (
-              <li key={chapter.id}>
-                <Link to={chapterPath(chapter.id)} onClick={() => setMenuOpen(false)}>
-                  {String(chapter.index).padStart(2, '0')} · {chapter.title}
-                </Link>
-              </li>
-            ))}
-          </ol>
+          <p>CHAPTER LEDGER / 01—10</p>
+          <ChapterLinks onNavigate={() => setMenuOpen(false)} />
         </nav>
       )}
 
