@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { chapters } from '../content/chapters';
+import SearchDialog from '../features/search/SearchDialog';
 import { chapterPath } from './paths';
 import RouteFocus from './RouteFocus';
 
@@ -14,7 +15,9 @@ const primaryLinks = [
 
 export default function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const searchTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -28,6 +31,29 @@ export default function AppShell() {
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [menuOpen]);
+
+  useEffect(() => {
+    const openSearch = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditing = target?.matches('input, textarea') || target?.isContentEditable;
+
+      if (
+        event.key !== '/' ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isEditing
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+
+    document.addEventListener('keydown', openSearch);
+    return () => document.removeEventListener('keydown', openSearch);
+  }, []);
 
   return (
     <div className="app-shell">
@@ -47,7 +73,14 @@ export default function AppShell() {
           ))}
         </nav>
 
-        <button type="button" aria-label="搜索手册" disabled>
+        <button
+          ref={searchTriggerRef}
+          type="button"
+          aria-label="搜索手册"
+          aria-haspopup="dialog"
+          aria-expanded={searchOpen}
+          onClick={() => setSearchOpen(true)}
+        >
           搜索
           <span aria-hidden="true"> /</span>
         </button>
@@ -87,6 +120,12 @@ export default function AppShell() {
       <footer className="site-footer">
         <p>建立知识体系，也练习如何把它讲清楚。</p>
       </footer>
+
+      <SearchDialog
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        triggerRef={searchTriggerRef}
+      />
     </div>
   );
 }
