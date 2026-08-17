@@ -34,6 +34,12 @@ function MdxAnchor({
   return <Link to={destination}>{children}</Link>;
 }
 
+function MdxDocumentTitle({
+  children,
+}: ComponentPropsWithoutRef<'h1'>) {
+  return <p className="topic-content__document-title">{children}</p>;
+}
+
 function MdxPre({
   children,
   ...props
@@ -60,6 +66,7 @@ function MdxBlockquote(props: ComponentPropsWithoutRef<'blockquote'>) {
 }
 
 export const mdxComponents = {
+  h1: MdxDocumentTitle,
   a: MdxAnchor,
   pre: MdxPre,
   table: MdxTable,
