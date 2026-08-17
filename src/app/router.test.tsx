@@ -16,6 +16,9 @@ describe('application routes', () => {
     ['/handbook', '完整手册目录'],
     ['/handbook/javascript-async', 'JavaScript 异步与 Web API'],
     ['/knowledge-map', '知识地图'],
+    ['/interview', '面试训练场'],
+    ['/code', '代码手册'],
+    ['/reference', '前端速查表'],
     ['/missing', '页面没有收录'],
   ])('%s renders its page heading', async (path, heading) => {
     const view = await renderRoute(path);
