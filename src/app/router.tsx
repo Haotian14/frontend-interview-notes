@@ -42,6 +42,27 @@ function createRoutes(): RouteObject[] {
           handle: { title: '知识地图' },
         },
         {
+          path: 'interview',
+          lazy: async () => ({
+            Component: (await import('./pages/InterviewPage')).default,
+          }),
+          handle: { title: '面试训练场' },
+        },
+        {
+          path: 'code',
+          lazy: async () => ({
+            Component: (await import('./pages/CodePage')).default,
+          }),
+          handle: { title: '代码手册' },
+        },
+        {
+          path: 'reference',
+          lazy: async () => ({
+            Component: (await import('./pages/ReferencePage')).default,
+          }),
+          handle: { title: '前端速查表' },
+        },
+        {
           path: '*',
           element: <NotFoundPage />,
           handle: { title: '页面没有收录' },
