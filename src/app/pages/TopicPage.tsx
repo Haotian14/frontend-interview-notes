@@ -1,28 +1,32 @@
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense } from 'react';
 import { MDXProvider } from '@mdx-js/react';
 import { useParams } from 'react-router-dom';
 import TopicLayout from '../../components/content/TopicLayout';
-import { getTopic, loadTopic } from '../../content/registry';
+import { getTopic, loadTopic, topics } from '../../content/registry';
 import { mdxComponents } from '../../mdx-components';
 
-export default function TopicPage() {
-  const { chapter, topic: topicSlug } = useParams();
-  const topic = topicSlug ? getTopic(topicSlug) : undefined;
-
-  if (!topic || topic.chapter !== chapter) {
-    throw new Response('Unknown handbook topic', {
-      status: 404,
-      statusText: 'Not Found',
-    });
-  }
-
-  const Article = useMemo(() => lazy(async () => {
+const articleComponents = new Map(topics.map(topic => [
+  topic.slug,
+  lazy(async () => {
     try {
       return await loadTopic(topic.slug);
     } catch (error) {
       throw new Error(`无法加载专题「${topic.title}」`, { cause: error });
     }
-  }), [topic.slug, topic.title]);
+  }),
+]));
+
+export default function TopicPage() {
+  const { chapter, topic: topicSlug } = useParams();
+  const topic = topicSlug ? getTopic(topicSlug) : undefined;
+  const Article = topic ? articleComponents.get(topic.slug) : undefined;
+
+  if (!topic || topic.chapter !== chapter || !Article) {
+    throw new Response('Unknown handbook topic', {
+      status: 404,
+      statusText: 'Not Found',
+    });
+  }
 
   return (
     <Suspense

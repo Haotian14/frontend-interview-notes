@@ -9,7 +9,7 @@ import CopyCodeButton from './CopyCodeButton';
 import TopicLayout from './TopicLayout';
 
 let intersectionCallback: IntersectionObserverCallback;
-let observer: IntersectionObserver;
+let observerRootMargin = '';
 
 class TestIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -19,7 +19,7 @@ class TestIntersectionObserver implements IntersectionObserver {
   constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     intersectionCallback = callback;
     this.rootMargin = options?.rootMargin ?? '0px';
-    observer = this;
+    observerRootMargin = this.rootMargin;
   }
 
   disconnect() {}
@@ -105,11 +105,11 @@ describe('TopicLayout', () => {
     act(() => {
       intersectionCallback([
         { target: heading, isIntersecting: true } as unknown as IntersectionObserverEntry,
-      ], observer);
+      ], {} as IntersectionObserver);
     });
 
     expect(nestedLink).toHaveAttribute('aria-current', 'location');
-    expect(observer.rootMargin).toBe('-20% 0px -65%');
+    expect(observerRootMargin).toBe('-20% 0px -65%');
   });
 
   test('copies code and announces success', async () => {

@@ -36,11 +36,6 @@ export default function InterviewDeck({
   const current = filtered.find(question => question.slug === currentSlug) ?? filtered[0];
 
   useEffect(() => {
-    setRemaining(durationSeconds);
-    setRevealed(false);
-  }, [current?.slug, durationSeconds]);
-
-  useEffect(() => {
     if (!current || revealed) return;
 
     const timer = window.setInterval(() => {

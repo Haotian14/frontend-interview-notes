@@ -30,10 +30,6 @@ export default function SearchDialog({
     inputRef.current?.focus();
   }, [open]);
 
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [query]);
-
   if (!open) return null;
 
   const closeAndRestore = () => {
@@ -104,7 +100,10 @@ export default function SearchDialog({
             aria-activedescendant={activeId}
             autoComplete="off"
             value={query}
-            onChange={event => setQuery(event.target.value)}
+            onChange={event => {
+              setQuery(event.target.value);
+              setActiveIndex(0);
+            }}
             placeholder="搜索事件循环、缓存、状态快照…"
             data-search-focus
           />
