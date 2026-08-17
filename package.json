@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run test:content && tsc -b && vite build && node scripts/build-worker.mjs",
+    "build": "npm run test:content && tsc -b && vite build && node scripts/build-worker.mjs && node scripts/verify-build.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
