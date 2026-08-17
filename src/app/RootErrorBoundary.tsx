@@ -3,8 +3,10 @@ import NotFoundPage from './pages/NotFoundPage';
 
 export default function RootErrorBoundary() {
   const error = useRouteError();
+  const isNotFound = (isRouteErrorResponse(error) || error instanceof Response) &&
+    error.status === 404;
 
-  if (isRouteErrorResponse(error) && error.status === 404) {
+  if (isNotFound) {
     return (
       <main id="main-content" tabIndex={-1}>
         <NotFoundPage />
