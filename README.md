@@ -1,49 +1,76 @@
-# 前端复习手册
+# 前端复习手册 V2
 
-一套内容优先、可检索的前端知识手册，覆盖从语言基础到工程实践和面试表达的完整路径。
+一个基于 React、TypeScript、Vite 与 MDX 的前端知识手册。第一阶段提供 10 个知识章节、8 篇统一质量标准的样板专题、加权搜索、面试训练、代码索引和速查表。
 
-## 内容范围
+## 路由
 
-- HTML & CSS：语义化、布局、响应式、样式工程
-- JavaScript：作用域、对象模型、事件循环、Promise、ES Module
-- TypeScript：类型收窄、泛型、高级类型、工程配置
-- React：渲染模型、状态、Effect、组件设计、性能优化
-- 浏览器与网络：渲染链路、HTTP 缓存、安全、性能指标
-- 前端工程化：构建、测试、Git/CI、架构设计
-- 手写与算法：防抖节流、深拷贝、Promise.all、并发控制、复杂度
-- 项目与面试：项目亮点、性能案例、线上排障、行为面试
+| 地址 | 内容 |
+| --- | --- |
+| `/` | 手册首页与三条复习路径 |
+| `/handbook` | 完整章节目录 |
+| `/handbook/:chapter` | 章节页 |
+| `/handbook/:chapter/:topic` | 稳定、可直接刷新的专题页 |
+| `/knowledge-map` | 章节与专题关系 |
+| `/interview` | 90 秒面试训练 |
+| `/code` | 含代码样板专题索引 |
+| `/reference` | 五类前端速查表 |
 
-每个专题包含一句话结论、核心机制、面试回答、常见陷阱，并为关键主题提供最小代码示例。
+## 专题目录
 
-## 功能
+每篇专题位于：
 
-- 完整章节目录与专题阅读页
-- 全局关键词搜索（快捷键 `/`）
-- 可按模块筛选的面试题库
-- 独立代码手册与复制功能
-- 高频知识速查表
-- 响应式布局、键盘操作与明暗主题
-
-## 本地运行
-
-```bash
-npm install
-npm run dev
+```text
+src/content/topics/<chapter>/<slug>/
+├── meta.ts
+└── article.mdx
 ```
 
-生产构建：
+`meta.ts` 提供标题、摘要、层级、阅读时间、关键词、前置/关联专题、HTTPS 资料、搜索文本和面试答案。注册表会在构建与测试时校验关系完整性。
+
+`article.mdx` 必须包含以下二级章节：
+
+- 一句话结论
+- 前置知识
+- 核心机制
+- 项目应用
+- 边界与反例
+- 面试回答
+- 深度追问
+- 关联专题
+- 资料来源
+
+验证材料可以采用最小代码、浏览器步骤、表格或可复现观察。
+
+## 常用命令
 
 ```bash
+npm run dev
+npm run test
+npm run test:content
+npm run test:e2e
+npm run check
 npm run build
 ```
 
-## 项目结构
+- `test`：运行 Vitest 单元、组件和内容测试。
+- `test:content`：只运行内容合同。
+- `test:e2e`：以 Playwright Chromium 验证生产预览。
+- `check`：依次执行 lint、类型检查、全部测试和生产构建。
+- `build`：先验证内容，再构建客户端与 Sites Worker，并检查首屏 JS、社交图片和禁止行为。
 
-```text
-src/
-├─ App.tsx       # 页面结构与交互
-├─ App.css       # 完整响应式视觉样式
-├─ data.ts       # 手册章节、专题与速查内容
-├─ index.css     # 全局样式与主题变量
-└─ main.tsx      # 应用入口
-```
+## 数据与隐私
+
+应用不创建账户，也不保存学习进度。筛选、计时、答案展开和当前题目只存在于 React 组件内存中；不会写入浏览器持久化存储或 Cookie。
+
+## 第一阶段样板专题
+
+- `/handbook/html-a11y/semantic-accessibility`
+- `/handbook/css/stacking-context`
+- `/handbook/javascript-async/event-loop`
+- `/handbook/typescript/type-narrowing`
+- `/handbook/react/render-state-snapshot`
+- `/handbook/browser-network/rendering-pipeline`
+- `/handbook/browser-network/http-cache`
+- `/handbook/engineering/testing-strategy`
+
+后续阶段可以在相同内容合同下继续扩充其余章节，不需要改动路由和阅读器基础设施。

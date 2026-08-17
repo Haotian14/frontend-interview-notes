@@ -8,7 +8,9 @@
 
 请先阅读[事件循环与任务队列](/topics/event-loop)，理解异步请求回调为何在后续任务或微任务中更新状态；它对应元数据中的 `event-loop` 前置专题。本文还默认读者熟悉 JavaScript 基元、对象、class、条件分支，以及 TypeScript 的联合类型和字面量类型。这里关注的不是请求调度顺序，而是异步边界带回的外部值如何经过运行时验证，再安全进入应用状态。
 
-## `unknown` 与 `any`
+## 核心机制
+
+### `unknown` 与 `any`
 
 `any` 基本关闭了类型检查：属性访问、函数调用和赋值都会被放行，错误沿数据流扩散到远离输入的位置。`unknown` 则表示“确实有一个值，但使用前不知道它是什么”；它能接收任意值，却要求先证明类型再读取属性或调用方法。
 
@@ -27,7 +29,7 @@ function safeLength(value: unknown) {
 
 JSON、`postMessage`、localStorage 反序列化值和第三方 API 响应都来自类型系统之外，适合先视为 `unknown`。验证一次并转换为可信领域类型，比把 `any` 传遍应用更容易定位错误。
 
-## 内置守卫与控制流分析
+### 内置守卫与控制流分析
 
 TypeScript 会沿条件、提前返回、赋值和可达性分析变量类型：
 
@@ -45,7 +47,7 @@ function format(value: string | number | Date | { label: string }) {
 - `instanceof` 检查运行时原型链，适合同一 realm 中真实 class 实例。JSON 没有类原型，跨 iframe 的实例也可能不满足预期。
 - 相等性判断和 truthiness 也会收窄，但 `if (value)` 会把空字符串、`0` 等合法值一起排除，不能机械替代显式空值判断。
 
-## 自定义类型谓词必须真的验证
+### 自定义类型谓词必须真的验证
 
 返回类型 `value is User` 会告诉编译器：函数返回 `true` 时，调用者可以把值当作 `User`。编译器不会检查函数体是否足以兑现承诺，因此谓词本身是需要测试和审查的可信边界。
 
@@ -77,7 +79,7 @@ function parseUser(value: unknown): User {
 
 只检查 `typeof value === 'object'` 就声明 `value is User` 是错误反例：字段可能缺失或类型错误。对于复杂、嵌套或需要错误路径的数据，可使用经过评估的 schema 校验库；关键仍是运行时代码确实检查了静态类型声称的约束。
 
-## 用可辨识联合表达请求状态
+### 用可辨识联合表达请求状态
 
 把多个互不约束的布尔值写成 `{ loading, hasError, data }` 会允许“加载中且成功且报错”等非法组合。可辨识联合给每个合法状态一个共同的字面量字段，控制流可以据此精确收窄：
 
@@ -106,7 +108,7 @@ function renderMessage(state: RequestState): string {
 
 在 `success` 分支中 `data` 必然存在，在 `error` 分支中 `error` 必然存在。组件不必再写非空断言，也无法构造没有数据的成功状态。
 
-## 用 `never` 做穷尽检查
+### 用 `never` 做穷尽检查
 
 `never` 表示不可能出现的值。当 switch 已处理联合的所有成员，default 分支中的变量就会收窄为 `never`：
 
@@ -120,7 +122,7 @@ function assertNever(value: never): never {
 
 也可以让函数具有明确返回类型并省略 default 来借助 `noImplicitReturns` 检查，但 `assertNever` 通常能在遗漏位置给出更直接的类型错误，并提供运行时护栏。
 
-## 断言不会验证 API 响应
+### 断言不会验证 API 响应
 
 ```ts
 const response = await fetch('/api/user/42');
