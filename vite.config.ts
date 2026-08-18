@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { cloudflare } from '@cloudflare/vite-plugin';
+import { sites } from '@openai/sites-vite-plugin';
 import mdx from '@mdx-js/rollup';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
@@ -8,6 +10,10 @@ import rehypePrettyCode from 'rehype-pretty-code';
 import { configDefaults } from 'vitest/config';
 // @ts-expect-error 构建脚本是 .mjs，没有类型声明。
 import { writeSearchIndex } from './scripts/build-search-index.mjs';
+
+process.env.WRANGLER_WRITE_LOGS ??= 'false';
+process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
+process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
 
 /**
  * 正文检索索引由 article.mdx 生成。放进 buildStart 而不是单独的 npm 脚本，
@@ -27,8 +33,25 @@ function searchIndexPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ isSsrBuild, mode }) => ({
   plugins: [
+    ...(!isSsrBuild && mode !== 'test'
+      ? [
+          sites(),
+          cloudflare({
+            viteEnvironment: { name: 'server' },
+            config: {
+              main: './worker/index.ts',
+              compatibility_date: '2026-05-22',
+              assets: {
+                binding: 'ASSETS',
+                html_handling: 'auto-trailing-slash',
+                not_found_handling: '404-page',
+              },
+            },
+          }),
+        ]
+      : []),
     searchIndexPlugin(),
     mdx({
       providerImportSource: '@mdx-js/react',
@@ -62,4 +85,4 @@ export default defineConfig({
     globals: true,
     exclude: [...configDefaults.exclude, 'tests/e2e/**'],
   },
-});
+}));

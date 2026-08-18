@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 
 const { render, collectRoutes } = await import('../dist-ssr/entry-server.js');
 
-const DIST = join(process.cwd(), 'dist');
+const DIST = join(process.cwd(), 'dist', 'client');
 const template = readFileSync(join(DIST, 'index.html'), 'utf8');
 
 // 预渲染会把首页写回 dist/index.html，因此重复执行时模板可能已经带上了上一轮的
@@ -19,7 +19,8 @@ if (!template.includes('<div id="root"></div>')) {
   throw new Error('dist/index.html 已经是预渲染结果，请先重新执行 vite build 再预渲染。');
 }
 
-const siteOrigin = process.env.SITE_ORIGIN ?? 'https://frontend-review.pages.dev';
+const siteOrigin = process.env.SITE_ORIGIN
+  ?? 'https://frontend-review-handbook.minato13.chatgpt.site';
 
 function escapeAttribute(value) {
   return value

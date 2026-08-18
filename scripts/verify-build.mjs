@@ -3,7 +3,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { stdout } from 'node:process';
 
-const html = await readFile('dist/index.html', 'utf8');
+const clientDist = join('dist', 'client');
+const html = await readFile(join(clientDist, 'index.html'), 'utf8');
 const initialFiles = new Set();
 const assetPattern = /(?:src|href)="\/?(assets\/[^"]+\.js)"/g;
 let match;
@@ -22,7 +23,7 @@ let vendorGzipBytes = 0;
 let appGzipBytes = 0;
 
 for (const file of initialFiles) {
-  const bytes = gzipSync(await readFile(join('dist', file))).byteLength;
+  const bytes = gzipSync(await readFile(join(clientDist, file))).byteLength;
   if (/vendor-/.test(file)) {
     vendorGzipBytes += bytes;
   } else {
@@ -44,11 +45,18 @@ if (initialGzipBytes > initialLimit) {
 }
 
 // 预渲染必须真的产出内容，否则 SEO 与首屏收益全部落空。
-const homeHtml = await readFile('dist/index.html', 'utf8');
+const homeHtml = await readFile(join(clientDist, 'index.html'), 'utf8');
 if (/<div id="root"><\/div>/.test(homeHtml)) {
   throw new Error('dist/index.html 没有预渲染内容');
 }
-for (const required of ['dist/sitemap.xml', 'dist/robots.txt', 'dist/404.html']) {
+for (const required of [
+  join(clientDist, 'sitemap.xml'),
+  join(clientDist, 'robots.txt'),
+  join(clientDist, '404.html'),
+  'dist/server/index.js',
+  'dist/server/wrangler.json',
+  'dist/.openai/hosting.json',
+]) {
   await stat(required);
 }
 
