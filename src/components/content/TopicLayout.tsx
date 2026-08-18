@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { chapters } from '../../content/chapters';
 import type { TopicMeta } from '../../content/types';
 import { chapterPath } from '../../app/paths';
+import ReadToggle from '../../features/progress/ReadToggle';
 import ContentCallout from './ContentCallout';
 import RelatedTopics from './RelatedTopics';
 import TopicToc from './TopicToc';
@@ -19,8 +20,8 @@ export default function TopicLayout({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const chapter = chapters.find(item => item.id === topic.chapter);
 
+  // 标题由 RouteFocus 依据路由参数统一设置，这里只负责把焦点移到正文标题。
   useEffect(() => {
-    document.title = `${topic.title} · 前端复习手册`;
     headingRef.current?.focus({ preventScroll: true });
   }, [topic.title]);
 
@@ -47,6 +48,7 @@ export default function TopicLayout({
             <ul aria-label="关键词">
               {topic.keywords.map(keyword => <li key={keyword}>{keyword}</li>)}
             </ul>
+            <ReadToggle slug={topic.slug} />
           </header>
 
           <ContentCallout title="一句话结论" variant="conclusion">

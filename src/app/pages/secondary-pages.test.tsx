@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { RouterProvider } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
+import { chapters } from '../../content/chapters';
 import { topics } from '../../content/registry';
 import { topicPath } from '../paths';
 import { createTestRouter } from '../router';
@@ -34,15 +35,43 @@ describe('secondary pages', () => {
     view.unmount();
   });
 
-  test('reference tables have captions and topic links', async () => {
+  test('code entries show each topic的真实输入输出与中文章节名', async () => {
+    const topic = topics.find(item => item.code);
+    if (!topic) throw new Error('测试需要代码专题');
+    const chapterTitle = chapters.find(item => item.id === topic.chapter)?.title;
+    const view = renderRoute('/code');
+    await screen.findByRole('heading', { level: 1, name: '代码手册' });
+
+    // 章节显示为中文标题而不是 slug。
+    expect(screen.queryByText(new RegExp(topic.chapter))).not.toBeInTheDocument();
+    expect(screen.getAllByText(new RegExp(chapterTitle!)).length).toBeGreaterThan(0);
+
+    // 输入输出来自各自专题，不是共用占位文案。
+    for (const item of topics.filter(entry => entry.code)) {
+      expect(screen.getByText(item.code!.input)).toBeInTheDocument();
+      expect(screen.getByText(item.code!.output)).toBeInTheDocument();
+    }
+    view.unmount();
+  });
+
+  test('reference tables are derived from topic metadata', async () => {
+    const referenceTopics = topics.filter(topic => topic.reference);
+    expect(referenceTopics.length).toBeGreaterThan(0);
+
     const view = renderRoute('/reference');
     await screen.findByRole('heading', { name: '前端速查表' });
 
     const tables = screen.getAllByRole('table');
-    expect(tables).toHaveLength(5);
-    for (const table of tables) {
-      expect(within(table).getByText(/速查|选择/)).toBeInTheDocument();
-      expect(within(table).getAllByRole('link').length).toBeGreaterThan(0);
+    expect(tables).toHaveLength(referenceTopics.length);
+
+    for (const topic of referenceTopics) {
+      const table = screen.getByRole('table', { name: topic.reference!.caption });
+      for (const row of topic.reference!.rows) {
+        expect(within(table).getByText(row.term)).toBeInTheDocument();
+      }
+      // 每张表都标注来源专题并链接过去。
+      expect(screen.getByRole('link', { name: topic.title }))
+        .toHaveAttribute('href', topicPath(topic));
     }
     view.unmount();
   });

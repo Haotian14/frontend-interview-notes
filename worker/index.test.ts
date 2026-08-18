@@ -5,14 +5,12 @@ function createEnv(handler: (request: Request) => Promise<Response>) {
   return { ASSETS: { fetch: vi.fn(handler) } };
 }
 
-describe('Sites worker SPA fallback', () => {
-  test('falls back to index.html for a missing client route', async () => {
-    const env = createEnv(async request => {
-      const path = new URL(request.url).pathname;
-      return path === '/index.html'
-        ? new Response('<main>handbook</main>', { status: 200 })
-        : new Response('missing', { status: 404 });
-    });
+describe('Sites worker fallback', () => {
+  test('serves the prerendered page for a known route without any fallback', async () => {
+    const env = createEnv(async () => new Response('<main>event loop</main>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }));
 
     const response = await worker.fetch(
       new Request('https://example.com/handbook/javascript-async/event-loop'),
@@ -20,9 +18,54 @@ describe('Sites worker SPA fallback', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain('handbook');
-    expect(env.ASSETS.fetch).toHaveBeenCalledTimes(2);
-    expect(new URL(env.ASSETS.fetch.mock.calls[1][0].url).pathname).toBe('/index.html');
+    expect(await response.text()).toContain('event loop');
+    expect(env.ASSETS.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('resolves a slash-less route to its prerendered directory index', async () => {
+    const env = createEnv(async request => {
+      const path = new URL(request.url).pathname;
+      return path === '/handbook/quality/xss-defense/index.html'
+        ? new Response('<main>XSS 防御</main>', { status: 200 })
+        : new Response('missing', { status: 404 });
+    });
+
+    const response = await worker.fetch(
+      new Request('https://example.com/handbook/quality/xss-defense'),
+      env,
+    );
+
+    // 没有这一步，规范地址会退化成没有内容的 SPA 壳。
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('XSS 防御');
+  });
+
+  test('falls back to 404.html and keeps a 404 status for an unknown route', async () => {
+    const env = createEnv(async request => {
+      const path = new URL(request.url).pathname;
+      return path === '/404.html'
+        ? new Response('<main>页面没有收录</main>', { status: 200 })
+        : new Response('missing', { status: 404 });
+    });
+
+    const response = await worker.fetch(
+      new Request('https://example.com/handbook/does-not-exist'),
+      env,
+    );
+
+    // 关键：不能回退到首页内容，也不能把不存在的地址报成 200。
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain('页面没有收录');
+
+    // 原请求 → 目录索引探测 → 404 页
+    const paths = env.ASSETS.fetch.mock.calls.map(
+      call => new URL(call[0].url).pathname,
+    );
+    expect(paths).toEqual([
+      '/handbook/does-not-exist',
+      '/handbook/does-not-exist/index.html',
+      '/404.html',
+    ]);
   });
 
   test('preserves the original 404 for a missing static asset', async () => {

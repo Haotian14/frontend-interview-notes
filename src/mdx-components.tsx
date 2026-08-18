@@ -3,12 +3,29 @@ import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import ContentCallout from './components/content/ContentCallout';
 import CopyCodeButton from './components/content/CopyCodeButton';
+import { topicPath } from './app/paths';
+import { getTopic } from './content/registry';
 
 function textContent(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(textContent).join('');
   if (isValidElement<{ children?: ReactNode }>(node)) return textContent(node.props.children);
   return '';
+}
+
+/**
+ * 正文里的站内互链统一写成 `/topics/<slug>`，与章节归属解耦：专题换章节时不必
+ * 改写所有引用它的文章。真实路由是 /handbook/:chapter/:topic，在这里解析。
+ */
+const TOPIC_LINK = /^\/topics\/([^/#?]+)(#.*)?$/;
+
+export function resolveContentHref(href: string) {
+  const match = TOPIC_LINK.exec(href);
+  if (!match) return href;
+
+  const topic = getTopic(match[1]);
+  if (!topic) return undefined;
+  return topicPath(topic) + (match[2] ?? '');
 }
 
 function MdxAnchor({
@@ -31,7 +48,14 @@ function MdxAnchor({
     );
   }
 
-  return <Link to={destination}>{children}</Link>;
+  const resolved = resolveContentHref(destination);
+
+  // 指向不存在的专题：内容合同测试会让它在 CI 失败，运行时降级为普通文本而不是死链。
+  if (resolved === undefined) {
+    return <span className="broken-topic-link" title="该专题尚未收录">{children}</span>;
+  }
+
+  return <Link to={resolved}>{children}</Link>;
 }
 
 function MdxDocumentTitle({

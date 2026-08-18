@@ -1,0 +1,219 @@
+# 防抖与节流的实现与取舍
+
+## 一句话结论
+
+防抖是"等安静后执行一次"，节流是"单位时间最多执行一次"；面试要考的不是能否写出五行版本，而是能否说清语义差异、处理好 `this` 与参数，并提供 `cancel` 让调用方能够清理。
+
+## 前置知识
+
+请先阅读[事件循环与任务队列](/topics/event-loop)，理解 `setTimeout` 的延迟只是"最早何时可被调度"而非精确时刻——这决定了本文所有实现的精度边界。两者都依赖闭包保存定时器句柄和时间戳，相关机制见[作用域链与闭包](/topics/closures-scope)。本文默认读者写过事件监听。
+
+## 核心机制
+
+### 两种语义
+
+假设用户在 1 秒内连续触发了 20 次事件，间隔 300ms 配置下：
+
+- **防抖**：每次触发都重置计时器。20 次触发期间一次都不执行，停止触发 300ms 后执行 1 次。
+- **节流**：第一次触发立即执行，之后每 300ms 最多再执行一次，1 秒内大约执行 3~4 次。
+
+一句话记忆：**防抖关心最终状态，节流关心过程反馈。** 搜索联想只需要用户打完字后的那一次请求（防抖）；滚动进度条需要滚动过程中持续更新（节流）。
+
+### 防抖实现
+
+从最小版本开始，逐步补齐工程需要的部分：
+
+```js
+function debounce(fn, wait = 300, { leading = false } = {}) {
+  let timer = null;
+  let calledLeading = false;
+
+  function debounced(...args) {
+    // 保留 this：让它能作为对象方法使用
+    const context = this;
+
+    if (leading && !calledLeading) {
+      calledLeading = true;
+      fn.apply(context, args);
+    }
+
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      // leading 模式下这一轮的首调用已执行过，尾调用只在有后续触发时才有意义
+      if (!leading) fn.apply(context, args);
+      calledLeading = false;
+    }, wait);
+  }
+
+  debounced.cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    calledLeading = false;
+  };
+
+  return debounced;
+}
+```
+
+三个容易被忽略的点：
+
+1. **`this` 与参数必须透传**。写成箭头函数或丢掉 `args`，它就不能用作 `obj.method = debounce(obj.method)`，也拿不到事件对象。
+2. **`cancel` 是必需的**，不是加分项。没有它，组件卸载后定时器仍会触发回调。
+3. **闭包捕获的是最后一次的 `args`**，这正是防抖的语义——执行时应该用最新的输入。
+
+### 节流实现
+
+节流有两种常见写法。**时间戳版**首次立即执行、但停止后没有尾调用；**定时器版**首次延迟、有尾调用。工程上通常需要两者结合：
+
+```js
+function throttle(fn, wait = 300, { leading = true, trailing = true } = {}) {
+  let last = 0;
+  let timer = null;
+  let lastArgs = null;
+
+  function invoke(context, args) {
+    last = Date.now();
+    fn.apply(context, args);
+  }
+
+  function throttled(...args) {
+    const context = this;
+    const now = Date.now();
+
+    // leading 关闭时，把第一次触发也纳入等待周期
+    if (!last && !leading) last = now;
+
+    const remaining = wait - (now - last);
+
+    if (remaining <= 0) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      invoke(context, args);
+    } else if (trailing && !timer) {
+      lastArgs = args;
+      timer = setTimeout(() => {
+        timer = null;
+        last = leading ? Date.now() : 0;
+        invoke(context, lastArgs);
+        lastArgs = null;
+      }, remaining);
+    }
+  }
+
+  throttled.cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    last = 0;
+    lastArgs = null;
+  };
+
+  return throttled;
+}
+```
+
+关键细节是**用 `remaining` 而不是固定的 `wait` 设置定时器**。如果距上次执行已过去 200ms、间隔是 300ms，尾调用应该在 100ms 后发生而不是 300ms 后；写错这一处会让节流的实际频率低于配置值。
+
+### 用 requestAnimationFrame 节流视觉更新
+
+当回调的作用是更新画面（视差、跟随光标、滚动进度），最合适的节流单位不是毫秒而是**帧**：
+
+```js
+function rafThrottle(fn) {
+  let frame = null;
+  let lastArgs = null;
+
+  function throttled(...args) {
+    lastArgs = args;
+    if (frame !== null) return;
+
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      fn.apply(this, lastArgs);
+    });
+  }
+
+  throttled.cancel = () => {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+  };
+
+  return throttled;
+}
+```
+
+它自动与浏览器的渲染机会对齐：一帧内触发多少次都只执行一次，页面不可见时浏览器还会暂停回调，省下无意义的计算。用 `setTimeout(fn, 16)` 模拟帧率既不准确，也享受不到这些优化。
+
+## 最小验证与证据
+
+给同一个输入框绑定两个版本，在回调里 `console.log(Date.now() - start)`，然后连续快速敲 10 个字符：
+
+```js
+const start = Date.now();
+input.addEventListener('input', debounce(() => console.log('debounce', Date.now() - start), 300));
+input.addEventListener('input', throttle(() => console.log('throttle', Date.now() - start), 300));
+```
+
+预期输出：`throttle` 在输入期间按约 300ms 间隔打印 3~4 条；`debounce` 全程沉默，在最后一次输入后 300ms 打印唯一一条。这组时间戳就是两种语义差异最直接的证据。
+
+验证 `cancel` 是否生效：调用后立即 `console.log` 一条标记，确认此后不再出现回调输出。在 React 里可以在 `useEffect` 的清理函数中调用 `cancel`，卸载组件后观察控制台不再有迟到的日志。
+
+验证节流的 `remaining` 计算：把间隔设为 1000ms，触发一次后等待 800ms 再触发第二次，尾调用应在约 200ms 后发生而不是 1000ms 后。写错这处的实现会明显延后。
+
+## 项目应用
+
+- 搜索联想、表单实时校验、自动保存草稿：防抖，通常 200~500ms，并在提交前调用一次 `flush` 或直接取消。
+- 滚动位置上报、无限滚动的触底判断、拖拽尺寸计算：节流，配合 `passive: true` 的监听器。
+- 视差、跟随光标、滚动驱动的动画：`rafThrottle`。
+- 按钮防重复提交：`leading: true, trailing: false` 的防抖，首次立即响应、后续忽略。
+- React 中用 `useMemo` 创建实例并在 `useEffect` 清理函数里 `cancel`；直接在渲染体里调用 `debounce(fn, 300)` 会导致每次渲染都产生新实例，防抖完全失效。
+- 需要"最终一定执行"的场景（如自动保存），确保 `trailing` 开启，并在页面卸载事件里 flush。
+
+## 边界与反例
+
+**定时器不保证精确。** `setTimeout(fn, 300)` 的含义是"至少 300ms 后可被调度"。长任务、后台标签页节流、系统休眠都会推迟它。因此不要把防抖/节流当作定时器精度工具，也不要在其上构建严格的时序断言。
+
+**在渲染中创建实例等于没有防抖。** 这是 React 里最常见的错误：每次渲染都调用 `debounce(...)` 得到新函数，闭包里的 `timer` 每次都是 `null`，于是每次输入都立即执行。必须让实例跨渲染保持稳定。
+
+**节流不是"降低频率就一定更快"。** 如果回调本身很轻而事件频率不高，包一层节流反而增加了闭包和定时器开销。先测量再决定。
+
+**两者都不能替代取消请求。** 防抖减少了请求数量，但已发出的请求仍可能乱序返回，导致旧结果覆盖新结果。搜索联想还需要 `AbortController` 取消过期请求，或按请求序号丢弃过期响应。
+
+**`leading + trailing` 都开启时，单次触发会执行两次吗？** 不会——正确的实现中，单次触发只有 leading 那一次；trailing 只在等待窗口内确实又发生了触发时才补。如果你的实现单次触发执行了两次，说明尾调用的条件判断有误。
+
+**库的行为未必与你的直觉一致。** lodash 的 `debounce` 支持 `maxWait`（本质上变成了带上限的节流），`throttle` 内部就是用 `debounce` + `maxWait` 实现的。团队协作时应统一使用库版本，避免各处手写实现语义不一。
+
+## 面试回答
+
+防抖和节流都用来削减高频事件的回调次数，但语义不同。防抖是"等安静"：每次触发重置计时器，只有停止触发满 N 毫秒后才执行一次，适合搜索联想、表单校验这类只关心最终状态的场景。节流是"限频率"：保证单位时间内最多执行一次，适合滚动上报、拖拽这类需要过程反馈的场景。实现上都用闭包保存定时器句柄，有三个细节我会强调：一是用 `apply` 透传 `this` 和参数，否则不能作为对象方法使用也拿不到事件对象；二是节流要用剩余时间而不是固定间隔来设置尾调用定时器，否则实际频率会低于配置；三是必须暴露 `cancel`，React 里要在 effect 清理函数中调用，否则卸载后定时器仍会触发。做视觉更新时我会优先用 `requestAnimationFrame` 节流，它与渲染帧对齐且页面不可见时会自动暂停。另外要注意防抖不能替代请求取消——已发出的请求仍可能乱序返回。
+
+## 深度追问
+
+### 为什么防抖实现里必须保留 `this` 和参数？
+
+因为防抖函数通常包裹的是对象方法或事件处理器。丢掉 `this` 会让 `obj.method = debounce(obj.method)` 在执行时 `this` 变成 `undefined`；丢掉 `args` 则拿不到事件对象，也就无法读取 `event.target.value`。用普通函数接收 `this` 并以 `fn.apply(context, args)` 调用是最简单的做法；如果用箭头函数定义 `debounced`，`this` 会被词法绑定到定义处，无法透传。
+
+### 节流的 `leading` 与 `trailing` 组合会带来什么差异？
+
+`leading: true, trailing: false` 是"立即响应，之后忽略"，适合按钮防重复；`leading: false, trailing: true` 是"延迟到窗口末尾统一执行"，适合合并批量更新；两者都开启是最常见的默认值，保证首次立即反馈且最后一次不丢失。都关闭则函数永远不执行，是配置错误。
+
+### 什么时候应该用 `requestAnimationFrame` 而不是定时器节流？
+
+当回调的最终效果是更新画面时。rAF 与浏览器的渲染机会对齐，保证一帧最多执行一次，避免在同一帧内做重复的样式写入；页面进入后台时浏览器会暂停 rAF，自动省去无用计算。反过来，如果回调是发网络请求、写日志或更新与渲染无关的状态，用毫秒节流更合适——这些工作不应该与帧率耦合。
+
+### 不提供 `cancel` 会在 React 组件里造成什么问题？
+
+组件卸载后，挂起的定时器仍会到期并执行回调。回调里若调用 `setState` 会对已卸载组件更新状态（现代 React 会忽略但仍是无效工作），若访问了 DOM 引用则可能拿到已移除的节点。更重要的是闭包会持有组件作用域内的变量，使这部分内存无法回收。正确做法是在 `useEffect` 的清理函数中调用 `cancel`，与解绑事件监听器同等重要。
+
+## 关联专题
+
+- [事件循环与任务队列](/topics/event-loop)：定时器回调进入任务队列的时机决定了防抖节流的精度上限，也解释了为什么延迟只是下界。
+- [作用域链与闭包](/topics/closures-scope)：两个实现都依赖闭包保存定时器句柄与时间戳；理解"闭包保存绑定"才能看懂为什么在渲染中重建实例会失效。
+- [React 渲染与状态快照](/topics/render-state-snapshot)：在组件中稳定持有防抖实例、并在清理函数中取消，是渲染快照与副作用配合的典型案例。
+
+## 资料来源
+
+- [MDN：setTimeout](https://developer.mozilla.org/en-US/docs/Web/API/Window/setTimeout)
+- [MDN：requestAnimationFrame](https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame)

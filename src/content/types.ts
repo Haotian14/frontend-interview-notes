@@ -7,6 +7,23 @@ export type ContentSource = {
   href: string;
 };
 
+/** 代码手册条目：这篇专题的最小验证要跑什么、该看到什么。 */
+export type CodeSpec = {
+  input: string;
+  output: string;
+};
+
+/** 速查表行；表格归属于提供它的专题。 */
+export type ReferenceRow = {
+  term: string;
+  meaning: string;
+};
+
+export type ReferenceTable = {
+  caption: string;
+  rows: ReferenceRow[];
+};
+
 export type TopicMeta = {
   slug: string;
   chapter: string;
@@ -21,6 +38,10 @@ export type TopicMeta = {
   sources: ContentSource[];
   searchText: string;
   hasCode: boolean;
+  /** hasCode 为 true 时必填，驱动 /code 的条目内容。 */
+  code?: CodeSpec;
+  /** 可选，驱动 /reference 的一张速查表。 */
+  reference?: ReferenceTable;
   interview: {
     answer: string;
     followUps: string[];

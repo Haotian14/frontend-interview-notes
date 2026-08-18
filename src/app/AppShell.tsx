@@ -141,7 +141,6 @@ export default function AppShell() {
           fallback={<p className="search-loading" role="status">正在打开搜索…</p>}
         >
           <SearchDialog
-            open
             onClose={() => setSearchOpen(false)}
             triggerRef={searchTriggerRef}
           />

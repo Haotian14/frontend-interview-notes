@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
+import { chapters } from '../../content/chapters';
 import { topics } from '../../content/registry';
 import { topicPath } from '../paths';
 
-const codeTopics = topics.filter(topic => topic.hasCode);
+const codeTopics = topics.filter(topic => topic.code);
+const chapterTitles = new Map(chapters.map(chapter => [chapter.id, chapter.title]));
 
 export default function CodePage() {
   return (
@@ -17,17 +19,17 @@ export default function CodePage() {
         {codeTopics.map(topic => (
           <li key={topic.slug}>
             <article>
-              <p>{topic.chapter} · {topic.level}</p>
+              <p>{chapterTitles.get(topic.chapter) ?? topic.chapter} · {topic.level}</p>
               <h2>{topic.title}</h2>
               <p>{topic.summary}</p>
               <dl>
                 <div>
                   <dt>预期输入</dt>
-                  <dd>专题给出的最小场景、数据或用户操作。</dd>
+                  <dd>{topic.code!.input}</dd>
                 </div>
                 <div>
                   <dt>预期输出</dt>
-                  <dd>可观察的日志、类型结果、界面状态或浏览器行为。</dd>
+                  <dd>{topic.code!.output}</dd>
                 </div>
               </dl>
               <Link to={topicPath(topic)}>打开「{topic.title}」完整专题</Link>
