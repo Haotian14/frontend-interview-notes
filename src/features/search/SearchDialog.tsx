@@ -5,14 +5,13 @@ import { topicPath } from '../../app/paths';
 import HighlightText from './HighlightText';
 import { searchTopics } from './searchIndex';
 
+// 挂载即代表打开：AppShell 用条件渲染控制生命周期，这里不再重复一个 open 开关。
 type SearchDialogProps = {
-  open: boolean;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 };
 
 export default function SearchDialog({
-  open,
   onClose,
   triggerRef,
 }: SearchDialogProps) {
@@ -26,11 +25,8 @@ export default function SearchDialog({
   const activeId = activeResult ? `search-result-${activeResult.item.slug}` : undefined;
 
   useEffect(() => {
-    if (!open) return;
     inputRef.current?.focus();
-  }, [open]);
-
-  if (!open) return null;
+  }, []);
 
   const closeAndRestore = () => {
     onClose();
@@ -120,6 +116,7 @@ export default function SearchDialog({
           {results.map((result, index) => {
             const topic = result.item;
             const selected = index === activeIndex;
+            const { section } = result;
             return (
               <li key={topic.slug}>
                 <Link
@@ -129,7 +126,8 @@ export default function SearchDialog({
                   id={`search-result-${topic.slug}`}
                   role="option"
                   aria-selected={selected}
-                  to={topicPath(topic)}
+                  // 命中正文时直接跳到对应小节。
+                  to={section ? `${topicPath(topic)}#${section.hash}` : topicPath(topic)}
                   onMouseMove={() => setActiveIndex(index)}
                   onFocus={() => setActiveIndex(index)}
                   onClick={onClose}
@@ -137,6 +135,12 @@ export default function SearchDialog({
                 >
                   <strong><HighlightText text={topic.title} query={query} /></strong>
                   <span><HighlightText text={topic.summary} query={query} /></span>
+                  {section && (
+                    <span className="search-result__section">
+                      <em>{section.heading}</em>
+                      <HighlightText text={section.excerpt} query={query} />
+                    </span>
+                  )}
                   <small>{topic.level} · {topic.minutes} 分钟</small>
                 </Link>
               </li>

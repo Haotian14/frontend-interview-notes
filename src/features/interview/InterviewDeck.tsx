@@ -35,15 +35,18 @@ export default function InterviewDeck({
 
   const current = filtered.find(question => question.slug === currentSlug) ?? filtered[0];
 
+  // 计时归零后停表：继续 tick 只会每秒空转一次 setState，且时间到需要给出反馈。
+  const expired = remaining === 0;
+
   useEffect(() => {
-    if (!current || revealed) return;
+    if (!current || revealed || expired) return;
 
     const timer = window.setInterval(() => {
       setRemaining(seconds => Math.max(0, seconds - 1));
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [current, revealed]);
+  }, [current, revealed, expired]);
 
   const resetSelection = () => {
     setCurrentSlug('');
@@ -98,8 +101,10 @@ export default function InterviewDeck({
       {current ? (
         <article>
           <header>
-            <p>{current.level} · 90 SECOND ANSWER</p>
-            <p aria-live="polite">剩余 {remaining} 秒</p>
+            <p>{current.level} · {durationSeconds} SECOND ANSWER</p>
+            <p aria-live="polite" data-expired={expired || undefined}>
+              {expired ? '时间到，先说出你的结论再看参考答案' : `剩余 ${remaining} 秒`}
+            </p>
             <h2 id="interview-question">{current.prompt}</h2>
           </header>
 

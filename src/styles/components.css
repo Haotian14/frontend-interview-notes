@@ -547,3 +547,100 @@ mark {
     flex-direction: column;
   }
 }
+
+/* --- 阅读进度 --------------------------------------------------------- */
+
+.read-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-ink);
+  border-radius: var(--radius-small);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.read-toggle:hover {
+  background: var(--color-paper);
+}
+
+.read-toggle[aria-pressed='true'] {
+  border-color: var(--color-accent-ink);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+
+.handbook-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.progress-reset {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.progress-reset:hover {
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+}
+
+.handbook-page li[data-read] > a::after {
+  content: ' ✓';
+  color: var(--color-accent-ink);
+}
+
+/* --- 搜索结果中的正文小节 --------------------------------------------- */
+
+.search-result__section {
+  display: block;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-line);
+  margin-top: var(--space-2);
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.search-result__section em {
+  display: block;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-style: normal;
+  letter-spacing: 0.04em;
+}
+
+/* --- 速查表来源与失效互链 --------------------------------------------- */
+
+.reference-source {
+  margin-top: var(--space-3);
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.broken-topic-link {
+  border-bottom: 1px dotted var(--color-line-strong);
+  color: var(--color-muted);
+}
+
+/* 面试计时归零后的提示。 */
+.interview-deck [data-expired] {
+  color: var(--color-danger-ink);
+  font-weight: 600;
+}

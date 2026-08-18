@@ -62,7 +62,7 @@ export default function HomePage() {
 
       <section aria-labelledby="sample-heading">
         <p>03 / SAMPLE TOPICS</p>
-        <h2 id="sample-heading">八篇样板专题</h2>
+        <h2 id="sample-heading">{topicCatalog.length} 篇专题</h2>
         <ul>
           {topicCatalog.map(topic => (
             <li key={topic.slug}>

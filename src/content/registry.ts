@@ -25,8 +25,16 @@ export const topics = [...metadataByKey.values()].sort((a, b) => {
   return chapterOrder || a.order - b.order;
 });
 
+// 内容合同由 `npm run test:content` 在构建前强制执行。生产环境不再于模块求值期抛错：
+// 那发生在 React 渲染之前，RootErrorBoundary 接不住，用户看到的是白屏。
 const issues = validateContent(topics, chapters);
-if (issues.length) throw new Error(issues.map(issue => issue.message).join('\n'));
+if (issues.length) {
+  const report = issues.map(issue => issue.message).join('\n');
+  if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+    throw new Error(report);
+  }
+  console.error('内容校验未通过，手册仍以现有专题渲染：\n' + report);
+}
 
 export function getTopic(slug: string) {
   return topics.find(topic => topic.slug === slug);

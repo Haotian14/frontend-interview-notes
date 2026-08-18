@@ -1,0 +1,154 @@
+# XSS 防御与内容安全策略
+
+## 一句话结论
+
+XSS 的本质是不可信数据越过数据边界被浏览器当成代码执行；防御的核心不是"过滤输入"，而是在**输出时按上下文正确编码**，再用内容安全策略把单点疏漏挡在可执行之前。
+
+## 前置知识
+
+请先阅读[语义化 HTML 与可访问性](/topics/semantic-accessibility)，理解浏览器如何把标记解析成 DOM——XSS 正是这个解析过程被数据劫持的结果。处理不可信输入时的类型建模可参考[类型收窄与穷尽检查](/topics/type-narrowing)：外部数据先以 `unknown` 承接、经校验再进入领域类型，和这里"边界处验证"的思路是同一件事的两面。本文默认读者知道 HTTP 响应由首部和正文组成。
+
+## 核心机制
+
+### 三种注入路径
+
+按不可信数据的到达方式，XSS 通常分三类：
+
+- **存储型**：攻击载荷写入数据库或对象存储，之后每个访问该内容的用户都被攻击。影响面最大。
+- **反射型**：载荷来自当前请求（查询参数、路径、表单），被服务端原样回显进响应。通常需要诱导用户点击构造好的链接。
+- **DOM 型**：载荷从未离开浏览器。前端代码读取 `location.hash`、`document.referrer` 或 `postMessage` 数据，再把它写进危险的 DOM 接口。服务端日志里可能完全看不到痕迹。
+
+这个分类决定**防御代码放在哪里**：前两种可以在服务端渲染时处理，DOM 型只能在客户端修复——服务端根本没见过那段数据。
+
+### 上下文决定编码方式
+
+同一段字符串放进不同位置需要完全不同的处理。这是整个主题最重要的一点：
+
+```js
+const value = untrusted;
+
+element.textContent = value;               // HTML 文本：安全
+element.innerHTML = `<div>${value}</div>`; // HTML 文本：需转义 < > &
+element.innerHTML = `<img alt="${value}">`;// 属性：需在引号内转义引号
+anchor.href = value;                       // URL：需协议白名单
+element.setAttribute('onclick', value);    // 代码上下文：任何转义都不足够
+```
+
+HTML 文本上下文转义 `<`、`>`、`&` 即可；属性上下文必须用引号包裹并额外转义引号，否则 `" onerror="alert(1)` 就能逃逸；URL 上下文的危险不是尖括号而是**协议**——`javascript:alert(1)` 不含任何需要 HTML 转义的字符，却能直接执行。
+
+这就是为什么"我们统一 HTML 转义了所有输入"仍会有洞：它只覆盖了一种上下文。
+
+### 框架默认安全，以及它的出口
+
+React、Vue、Svelte 的插值默认针对 HTML 文本上下文转义，日常写法是安全的：
+
+```jsx
+<p>{userInput}</p>          {/* 安全：作为文本插入 */}
+```
+
+风险集中在**主动绕过它的接口**：
+
+```jsx
+<div dangerouslySetInnerHTML={{ __html: userInput }} />  {/* 需净化 */}
+<a href={userInput}>链接</a>                              {/* 需协议校验 */}
+<script src={userInput} />                                {/* 需来源校验 */}
+```
+
+`href` 这一条最容易被忽略——它看起来是普通的属性插值，框架也确实转义了 HTML 字符，但协议层面不受保护。正确做法是显式白名单：
+
+```js
+function safeUrl(value) {
+  try {
+    const url = new URL(value, location.origin);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null; // 无法解析的地址一律拒绝
+  }
+}
+```
+
+需要渲染用户提供的富文本时，不要自己写正则过滤标签——绕过手法数量庞大且持续演进。使用 DOMPurify 等成熟净化库，配置允许的标签与属性白名单，并跟进版本更新。
+
+### CSP：第二道防线
+
+内容安全策略通过响应首部限制页面可以加载和执行什么。它不修复注入点，而是让注入难以变成执行：
+
+```http
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'nonce-r4nd0m' 'strict-dynamic';
+  object-src 'none';
+  base-uri 'none'
+```
+
+要点：
+
+- **用 nonce 或 hash 授权脚本**，不要用 `'unsafe-inline'`——后者等于放弃了 CSP 对内联脚本的防护。nonce 必须每次响应随机生成，绝不能是固定值。
+- **`'strict-dynamic'`** 让被授权的脚本可以动态加载它需要的子资源，避免维护冗长的域名白名单（基于域名的白名单历史上被大量绕过）。
+- **`object-src 'none'` 和 `base-uri 'none'`** 关掉两个常被忽略的执行与劫持面。
+- 先用 `Content-Security-Policy-Report-Only` 配合 `report-to` 收集违规，确认不误伤业务后再切换为强制模式。
+
+Trusted Types 更进一步，把 `innerHTML`、`script.src` 这类"注入汇点"变成只接受经过策略函数产生的可信类型，从而把散落各处的风险收敛到少数几个可审计的位置。
+
+## 最小验证与证据
+
+在本地起一个受控页面，把 `<img src=x onerror=alert(1)>` 依次通过三条路径渲染：`textContent`、框架插值、`innerHTML`。前两者应显示为可见文本，第三者弹窗——这直接演示了"数据边界"在哪里被跨越。
+
+再单独验证 URL 上下文：把 `javascript:alert(1)` 传给 `<a href={value}>`。在 React 中你会看到它仍然可点击执行（较新版本会警告但不阻止），加上 `safeUrl` 白名单后链接被拒绝。这条证据最能说明"框架转义 ≠ 全上下文安全"。
+
+CSP 的验证看控制台：注入一段内联脚本，未配置 CSP 时执行，配置 `script-src 'nonce-…'` 后应出现 `Refused to execute inline script` 并产生一条违规报告。用 Report-Only 模式在预发布环境跑一段时间，收集到的报告就是上线前的证据。
+
+## 项目应用
+
+- 建立"不可信数据清单"：URL 参数、表单、第三方 API 响应、`postMessage`、剪贴板、文件名，明确每一项的注入上下文。
+- 把 `innerHTML`、`dangerouslySetInnerHTML`、`outerHTML`、`document.write`、`eval`、`new Function` 加入 ESLint 禁用或需审查名单，让新增的危险出口必须经过讨论。
+- 富文本渲染统一走一个封装好的净化组件，而不是让每个调用点各自决定配置。
+- CSP 先以 Report-Only 上线并接入告警，再逐步收紧；nonce 由服务端每次响应生成。
+- Cookie 设置 `HttpOnly`、`Secure`、`SameSite`，降低会话令牌被脚本读取的风险——这是缓解措施，不是防御。
+- 把典型载荷（属性逃逸、`javascript:` 协议、SVG `onload`）写成回归测试，防止修复被后续重构撤销。
+
+## 边界与反例
+
+**"过滤输入"不是防御策略。** 同一份数据可能出现在 HTML、属性、URL、JSON 等多个上下文中，入口处无法知道未来的输出位置；过早转义还会污染数据本身，导致数据库里存着 `&amp;amp;`。正确的分工是：入口做**业务校验**（长度、格式、枚举），出口做**上下文编码**。
+
+**CSP 不能替代输出编码。** 它是缓解层：配置错误、旧浏览器不支持、或攻击者找到策略允许的执行路径时都会失效。把 CSP 当作唯一防线，等于把安全性押在一行首部上。
+
+**HttpOnly 不能防 XSS。** 它只阻止脚本读取该 Cookie。攻击者仍可在受害者浏览器里以其身份发起请求、读取页面数据、修改 DOM 骗取凭据。它降低的是"令牌被窃取后长期滥用"的风险，不是注入本身。
+
+**框架不是免死金牌。** 默认插值覆盖 HTML 文本上下文，但 `href`、`src`、`style`、`srcdoc`、动态组件名和服务端渲染时拼接的内联脚本都在它的保护之外。
+
+**自己写的标签过滤器几乎一定有洞。** 大小写变形、编码变形、畸形标签、SVG/MathML 命名空间、mutation XSS 等绕过手法长期演进，这是必须用维护中的成熟库的少数场景之一。
+
+## 面试回答
+
+XSS 是不可信数据越过数据边界被当成代码执行，按注入路径分存储型、反射型和 DOM 型，其中 DOM 型只能在前端修复。防御的第一原则是按输出上下文编码：HTML 文本转义尖括号和 &，属性要在引号内转义引号，URL 要做协议白名单拒绝 `javascript:` 和 `data:`，JavaScript 和 CSS 上下文则根本不应拼接不可信数据。React、Vue 的默认插值覆盖了 HTML 文本上下文，所以真正的风险集中在绕过它的出口——`innerHTML`、`dangerouslySetInnerHTML`、`href`/`src`；渲染富文本要用 DOMPurify 这类成熟净化库而不是自己写正则。第二层是 CSP：用 nonce 或 hash 授权脚本、避免 `unsafe-inline`，配合 `strict-dynamic` 和 Trusted Types 收敛注入汇点，让单个疏漏不直接变成可执行漏洞。需要强调的是"统一过滤输入"不是正确策略，入口做业务校验、出口做上下文编码才是。
+
+## 深度追问
+
+### 为什么"统一转义所有输入"不是正确的防御策略？
+
+因为编码方式取决于输出上下文，而入口处无法预知数据将来会被放到哪里。同一个用户名可能出现在 HTML 文本、`title` 属性、URL 查询串和 JSON 响应中，四者需要四种不同处理。入口统一转义还会污染存储的数据，造成二次转义和显示错误。正确分工是入口做业务校验（长度、格式、枚举范围），出口按上下文编码。
+
+### DOM 型 XSS 与反射型 XSS 在防御位置上有什么区别？
+
+反射型的载荷经过服务端，可以在渲染响应时编码，服务端日志也能看到攻击痕迹。DOM 型的载荷可能完全不发给服务器——例如 `location.hash` 的内容，服务端既看不到也无法处理，只能靠前端在写入 DOM 时正确处理。因此 DOM 型的审计对象是前端代码里所有从不可信来源读取、再写入危险汇点的路径。
+
+### CSP 为什么不能替代输出编码？
+
+CSP 限制的是"什么脚本可以执行、什么资源可以加载"，不改变注入点是否存在。策略配置存在大量削弱自身的写法（`unsafe-inline`、过宽的域名白名单、可上传内容的同源目录），浏览器支持程度也不一致。它应被理解为纵深防御的一层：正确编码防止注入发生，CSP 在编码出现疏漏时降低后果。
+
+### HttpOnly Cookie 能防住 XSS 吗？
+
+不能。`HttpOnly` 只阻止 `document.cookie` 读取该 Cookie，脚本仍然在受害者的会话中运行：它可以直接发起带凭据的请求完成转账或改密，可以读取页面上的敏感数据，可以伪造登录框骗取密码。它是有价值的缓解措施，能阻断"窃取令牌后在别处长期复用"这条路径，但对注入本身和同页面内的攻击无效。
+
+## 关联专题
+
+- [语义化 HTML 与可访问性](/topics/semantic-accessibility)：理解浏览器如何把标记解析为 DOM，才能判断哪些位置会把数据变成代码。
+- [类型收窄与穷尽检查](/topics/type-narrowing)：外部输入先以 `unknown` 承接、经真实校验再进入领域类型，与"边界处验证"是同一原则。
+- [作用域链与闭包](/topics/closures-scope)：注入脚本能读取同源页面上下文中的一切，理解闭包与作用域有助于评估泄露范围。
+
+## 资料来源
+
+- [OWASP：Cross Site Scripting Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)
+- [MDN：Content Security Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP)
+- [W3C：Trusted Types](https://www.w3.org/TR/trusted-types/)
