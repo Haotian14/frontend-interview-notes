@@ -45,7 +45,7 @@ export default defineConfig(({ isSsrBuild, mode }) => ({
               compatibility_date: '2026-05-22',
               assets: {
                 binding: 'ASSETS',
-                html_handling: 'auto-trailing-slash',
+                html_handling: 'drop-trailing-slash',
                 not_found_handling: '404-page',
               },
             },
