@@ -93,6 +93,13 @@ describe('phase-one content contract', () => {
         expect(headings, `${topic.slug} 缺少章节：${required}`).toContain(required);
       }
 
+      const visibleContent = view.container.cloneNode(true) as HTMLElement;
+      visibleContent.querySelectorAll('code, pre').forEach(node => node.remove());
+      expect(
+        visibleContent.textContent,
+        `${topic.slug} 存在未被 MDX 解析的加粗标记`,
+      ).not.toContain('**');
+
       view.unmount();
     }
   });
