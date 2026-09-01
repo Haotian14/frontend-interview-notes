@@ -32,4 +32,10 @@ describe('V2 style contract', () => {
     expect(indexHtml).not.toContain('fonts.googleapis.com');
     expect(indexHtml).not.toContain('fonts.gstatic.com');
   });
+
+  test('declares browser and home-screen icons', () => {
+    expect(indexHtml).toContain('rel="icon" href="/favicon.svg"');
+    expect(indexHtml).toContain('rel="icon" href="/favicon-32x32.png"');
+    expect(indexHtml).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
+  });
 });
