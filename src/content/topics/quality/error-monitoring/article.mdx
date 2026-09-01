@@ -1,0 +1,163 @@
+# 前端错误监控与稳定性
+
+## 一句话结论
+
+四类信号必须分别采集——同步异常、未处理拒绝、资源加载失败、接口失败——它们的捕获方式各不相同；采集之后的重点是可还原（Source Map）、可去重（指纹）、可定位（请求 ID）和可行动（阈值告警）。
+
+## 前置知识
+
+请先阅读[async/await 与错误处理](/topics/async-await-errors)，理解分层的错误策略。监控是这套策略的最后一环：把没能在业务层处理掉的异常收集起来。
+
+## 核心机制
+
+### 采集四类信号
+
+**1. 同步运行时异常**
+
+```js
+window.addEventListener('error', event => {
+  // 资源加载失败也会走这里，靠 event.target 区分
+  if (event.target !== window) return;
+  report({
+    kind: 'js-error',
+    message: event.message,
+    stack: event.error?.stack,
+    filename: event.filename,
+    line: event.lineno,
+    column: event.colno,
+  });
+});
+```
+
+最经典的坑：**跨域脚本抛错时只能拿到 `"Script error."`**，没有行号也没有堆栈。浏览器出于安全不暴露跨源脚本的内容。解法是两步：
+
+```html
+<script src="https://cdn.example.com/app.js" crossorigin="anonymous"></script>
+```
+
+并让 CDN 对该资源返回 `Access-Control-Allow-Origin`。少了任何一步都还是那条无用的错误。
+
+**2. 未处理的 Promise 拒绝**
+
+```js
+window.addEventListener('unhandledrejection', event => {
+  report({ kind: 'unhandled-rejection', reason: normalize(event.reason) });
+});
+```
+
+异步代码的漏点几乎都在这里。注意 `event.reason` 可能是任何值，不一定是 `Error`，上报前要规范化。
+
+**3. 资源加载失败**
+
+图片、脚本、样式的 `error` 事件**不冒泡**，必须在捕获阶段监听：
+
+```js
+window.addEventListener('error', event => {
+  const target = event.target;
+  if (target === window || !(target instanceof HTMLElement)) return;
+  report({ kind: 'resource-error', tag: target.tagName, url: target.src || target.href });
+}, true);   // ← 捕获阶段
+```
+
+这类错误常常是 CDN 故障、区域网络屏蔽或版本发布后旧文件被清理的信号，价值很高。
+
+**4. 接口失败与慢请求**
+
+在 HTTP 客户端封装里统一采集：状态码、耗时、接口路径（去掉动态 id 以免指纹爆炸）、以及**服务端返回的请求 ID**。请求 ID 是把前端报错和后端日志串起来的唯一手段，值得在架构上强制要求。
+
+**React 错误边界**只捕获**渲染期、生命周期和构造函数**中的异常，不捕获事件处理器、异步回调、服务端渲染和错误边界自身的异常。所以它是补充而不是替代：
+
+```jsx
+<ErrorBoundary fallback={<ErrorState />} onError={report}>
+  <Dashboard />
+</ErrorBoundary>
+```
+
+### 上报要可靠
+
+```js
+function report(payload) {
+  const body = JSON.stringify({ ...payload, release, userId, path: location.pathname });
+  // sendBeacon 在页面卸载时仍能发出，且不阻塞导航
+  if (!navigator.sendBeacon?.('/collect', body)) {
+    fetch('/collect', { method: 'POST', body, keepalive: true }).catch(() => {});
+  }
+}
+```
+
+要点：`sendBeacon` 或 `fetch` 的 `keepalive` 保证页面关闭时不丢；上报本身失败必须静默，绝不能让监控代码制造新错误或形成死循环。
+
+### 堆栈还原
+
+生产代码经过压缩，堆栈里只有 `a.js:1:23456`。必须：
+
+1. 构建时生成 Source Map；
+2. **上传到监控服务，不部署到线上**（`hidden-source-map` 之类的模式），否则等于公开源码；
+3. 每次上报带上 `release` 版本号，让服务端能匹配到对应的 map。
+
+### 去噪与去重
+
+原始数据里大量噪音必须先过滤，否则面板会被淹没：
+
+- 浏览器扩展注入的脚本报错（文件名以 `chrome-extension://` 开头）。
+- 已知的第三方脚本错误（广告、客服组件）。
+- 用户主动取消的请求（`AbortError`）与网络离线错误。
+- `ResizeObserver loop limit exceeded` 之类的良性警告。
+
+去重靠**指纹**：把"错误类型 + 归一化后的消息 + 堆栈顶部几帧"哈希成一个 ID，同一指纹聚合成一个 issue，记录首次出现版本、影响用户数、发生次数。归一化时要去掉消息里的动态部分（id、时间戳、URL 参数），否则同一个 bug 会散成上千条。
+
+### 告警要可行动
+
+按**影响用户数**和**错误率**设阈值，而不是绝对次数；把发布事件标注在时间线上，某个版本上线后错误率跳升就能立刻回滚。告警必须指向一个具体的 issue 和一个负责人，否则很快会被忽略。
+
+配合[Core Web Vitals 与性能测量](/topics/web-vitals)的数据一起看：很多"页面变慢"其实是某个接口开始失败并触发重试。
+
+## 项目应用
+
+1. 监控 SDK 在应用入口最早初始化，早于业务代码，否则启动期的错误采集不到。
+2. 所有脚本标签加 `crossorigin`，CDN 配好 CORS 头，并在灰度环境验证堆栈确实完整——这一步不验证，事后才发现全是 `Script error.`。
+3. 建立 `release` 版本号规范并在 CI 中自动上传 Source Map，把"忘记上传"从流程中消除。
+4. HTTP 客户端统一注入请求 ID、统一采集失败，业务代码不重复写上报。
+5. 错误边界按页面或功能区划分，提供有意义的降级 UI 和"重试"入口，不要整页白屏。
+6. 定期（例如每周）清理噪音规则并复盘 Top 10 错误，让面板保持可读。监控的价值来自持续维护而不是接入那一天。
+
+## 边界与反例
+
+"接了监控就稳定了"是错觉。监控只提供信号，稳定性来自类型检查、测试、灰度和回滚能力，见[前端测试策略与分层](/topics/testing-strategy)。
+
+"错误数下降就是变好了"要警惕：可能是采集坏了、SDK 初始化失败、或者用户根本进不来。健康的做法是同时监控**上报量本身**，量骤降也要告警。
+
+"全量上报最保险"在高流量下会打爆采集服务并产生可观成本。常见策略是错误类事件全量、性能类事件采样，并对单个用户单位时间内的上报数量设上限（防止死循环刷屏）。
+
+`window.onerror` 与 `addEventListener('error')` 二选一即可，同时用会重复上报；且 `onerror` 会被后注册的赋值覆盖，SDK 之间容易互相踩踏。
+
+隐私是硬约束：不要把表单内容、请求体、URL 里的令牌、用户输入直接上报。需要用户标识时用不可逆的匿名 ID，并在隐私政策里说明。
+
+最后，`try/catch` 捕获后**吞掉**的异常监控看不到。要么处理，要么带上下文重新抛出，绝不静默。
+
+## 面试回答
+
+我会先把要采集的信号分成四类，因为捕获方式完全不同。
+
+第一类是同步运行时异常，用 `window` 上的 `error` 事件。这里有个经典坑：跨域脚本抛错时浏览器只给一条 `"Script error."`，必须给 `script` 标签加 `crossorigin` 并让静态资源返回 CORS 头，才能拿到消息和堆栈。第二类是未处理的 Promise 拒绝，用 `unhandledrejection`，异步代码的漏点几乎都在这里。第三类是资源加载失败，图片和脚本的 `error` 事件不冒泡，必须在**捕获阶段**监听。第四类是接口层，在请求封装里统一记录状态码、耗时和服务端返回的请求 ID，这样才能把前端报错和后端日志串起来。
+
+React 应用还要加错误边界，但要清楚它只捕获渲染期、生命周期和构造函数中的异常，事件处理器和异步回调不在范围内。
+
+采集之后的关键是可用性：上报用 `sendBeacon` 或 `keepalive` 避免页面卸载丢数据；生产代码压缩过，必须把 Source Map 上传到监控服务而不是部署到线上；同一个错误按"类型 + 归一化消息 + 堆栈顶部"生成指纹去重，否则一次故障会淹没面板。最后告警按影响用户数和错误率设阈值并结合发布事件，某个版本错误率突增就能快速回滚。
+
+## 深度追问
+
+1. **跨域脚本为什么只有 `Script error.`？** 浏览器不向页面暴露跨源脚本的内容细节，防止通过错误信息探测其它源的数据。解决需要两步同时具备：`script` 标签加 `crossorigin`，且脚本响应带 `Access-Control-Allow-Origin`。少一步都拿不到堆栈。
+2. **错误边界的覆盖范围？** 捕获子树在**渲染、生命周期方法和构造函数**中抛出的异常；不捕获事件处理器、`setTimeout` 等异步回调、服务端渲染以及边界自身抛出的异常。后者需要 `try/catch`、`unhandledrejection` 和全局兜底覆盖。
+3. **怎么去噪和去重？** 去噪靠规则过滤：浏览器扩展、已知第三方脚本、用户主动取消的请求、良性警告。去重靠指纹：把错误类型、归一化后的消息（剥离 id、时间戳等动态片段）和堆栈顶部若干帧哈希成 ID，同指纹聚合为一个 issue 并统计影响用户数与首次出现版本。
+
+## 关联专题
+
+- [async/await 与错误处理](/topics/async-await-errors)：分层策略决定哪些错误最终会走到监控。
+- [Core Web Vitals 与性能测量](/topics/web-vitals)：稳定性与性能数据要一起解读。
+- [前端测试策略与分层](/topics/testing-strategy)：监控是最后一道防线，不是第一道。
+
+## 资料来源
+
+- [MDN — GlobalEventHandlers.onerror](https://developer.mozilla.org/en-US/docs/Web/API/Window/error_event)
+- [MDN — unhandledrejection event](https://developer.mozilla.org/en-US/docs/Web/API/Window/unhandledrejection_event)

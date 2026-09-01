@@ -1,0 +1,170 @@
+# async/await 与错误处理
+
+## 一句话结论
+
+`async` 函数总是返回 Promise，`await` 只是把"注册微任务回调"写成了暂停与恢复；它带来的真正好处是让拒绝变成可被 `try/catch` 捕获的异常，代价是很容易把并发写成串行。
+
+## 前置知识
+
+请先阅读[Promise 状态机与组合](/topics/promise-semantics)。`async`/`await` 没有引入新的并发模型，它是 Promise 的语法层；不理解 `then` 的返回值规则，就会在 `return await` 这类细节上出错。
+
+## 核心机制
+
+### async 函数是什么
+
+```js
+async function load(id) {
+  return fetchUser(id);   // 返回值被包装成 Promise
+}
+
+// 等价于
+function load(id) {
+  return Promise.resolve().then(() => fetchUser(id));
+}
+```
+
+三条规则：
+
+- 返回普通值 → 以该值兑现；返回 thenable → 采纳它的结果。
+- 抛出异常 → 返回的 Promise 变为拒绝。
+- 函数体从第一个 `await` 处开始异步执行，**在此之前的代码是同步的**。这一点在做参数校验时很有用：把校验放在第一个 `await` 之前，调用方能更早看到错误（但仍然是以拒绝的形式）。
+
+`await x` 的语义是：把 `x` 用 `Promise.resolve` 规范化，注册续体（函数剩余部分）为微任务，然后让出。因此 `await` 之后的代码总是在微任务里跑，即使 `await` 的是一个普通数字。
+
+### 串行与并发
+
+这是 `async`/`await` 最常见的性能问题：
+
+```js
+// 串行：总耗时 = 各请求之和
+const results = [];
+for (const id of ids) {
+  results.push(await fetchOne(id));
+}
+
+// 并发：总耗时 ≈ 最慢的一个
+const results = await Promise.all(ids.map(id => fetchOne(id)));
+
+// 有依赖时才该串行
+const user = await fetchUser(id);
+const orders = await fetchOrders(user.orgId);   // 依赖上一步的结果
+```
+
+**关键不在 `await`，而在于产生 Promise 的调用被推迟了**。下面这个写法同样是并发的：
+
+```js
+const userPromise = fetchUser(id);      // 立刻发出
+const statsPromise = fetchStats(id);    // 立刻发出
+const user = await userPromise;
+const stats = await statsPromise;
+```
+
+但要注意：如果 `userPromise` 先失败而 `statsPromise` 的拒绝还没有处理器，可能触发一次 `unhandledrejection`。要么用 `Promise.all`，要么给每个 Promise 都接上处理器。
+
+### 错误处理的三个坑
+
+**坑一：`return p` 而不是 `return await p`。**
+
+```js
+async function bad() {
+  try {
+    return fetchUser(id);        // 函数在这里就返回了，Promise 尚未落定
+  } catch (err) {
+    return null;                 // 永远不会执行
+  } finally {
+    release();                   // 会在 fetch 完成之前执行
+  }
+}
+
+async function good() {
+  try {
+    return await fetchUser(id);  // 等待落定，catch 和 finally 才有意义
+  } catch (err) {
+    return null;
+  } finally {
+    release();
+  }
+}
+```
+
+在 `try` 块外的 `return p` 省略 `await` 是无害的（还省一个微任务），但在 `try`/`finally` 内必须写 `await`。
+
+**坑二：`catch (err)` 里的 `err` 是 `unknown`。** 任何值都能被 `throw`，不一定是 `Error`：
+
+```js
+try {
+  await risky();
+} catch (err) {
+  const error = err instanceof Error ? err : new Error(String(err));
+  report(error);
+}
+```
+
+**坑三：吞掉异常。** `catch` 里只打日志然后继续执行，会让上层以为一切正常。要么处理（降级、重试、给用户反馈），要么带上下文重新抛出：
+
+```js
+catch (err) {
+  throw new Error(`加载用户 ${id} 失败`, { cause: err });
+}
+```
+
+`cause` 保留原始错误，监控系统可以还原完整链路。
+
+### 分层的错误策略
+
+不要在每个函数里写 `try/catch`。合理的分层是：
+
+1. **数据访问层**：把 HTTP 状态码、解析失败等技术错误转成语义化的领域错误（`NotFoundError`、`ValidationError`），附上 `cause` 后抛出。不做用户提示，不吞。
+2. **用例/协调层**：决定重试、降级、走缓存还是放弃。这是唯一"知道业务该怎么办"的层。
+3. **界面层**：统一渲染错误状态。React 里用错误边界处理渲染期异常，用状态管理处理异步错误——注意**错误边界捕获不到事件处理器和异步回调中的错误**。
+4. **全局兜底**：`window.onerror` 与 `unhandledrejection` 上报，见[前端错误监控与稳定性](/topics/error-monitoring)。
+
+### 栈追踪
+
+`await` 之后的续体在新的微任务里执行，同步栈已经展开。现代引擎会做"零成本异步栈追踪"，把 `await` 链拼接起来，所以 `async`/`await` 的栈通常比 `.then` 链更完整——这是它相对 Promise 链的一个实际优势。但通过 `setTimeout` 或事件回调跨越的边界仍然会断，需要在抛出处补足上下文。
+
+## 项目应用
+
+1. 先画依赖图：没有依赖关系的请求一律并发。代码审查时看到循环里的 `await` 就要问一句"这些能并行吗"。
+2. 需要限流时用并发池而不是全量 `Promise.all`；需要全部结果时用 `allSettled`。
+3. 所有 `catch` 要么真正处理，要么用 `cause` 包装后重抛；禁止空 `catch` 和只 `console.log` 的 `catch`。
+4. 清理逻辑（关闭 loading、释放锁、取消订阅）放 `finally`，并确保 `try` 里用了 `return await`；不要在 `finally` 里 `return`，它会覆盖正常返回值和异常。
+5. 组件卸载后不要再 `setState`：在 `await` 之后检查取消标志或 `AbortSignal`，见[请求取消与竞态](/topics/abort-race)。
+6. 顶层 `await` 只用在入口模块，工具模块用它会阻塞整棵依赖子图的求值。
+
+## 边界与反例
+
+"`async`/`await` 让异步变同步"是最有害的误解。函数只是**看起来**顺序执行，期间事件循环照常运转，其它任务、用户交互、组件卸载都可能发生。任何跨 `await` 的假设（DOM 还在、组件还挂载、数据没变）都必须重新验证。
+
+"`await` 会阻塞"也不对。它只暂停当前 `async` 函数，主线程继续处理其它任务。真正阻塞主线程的是同步的重计算。
+
+"用 `try/catch` 就安全了"忽略了 `catch` 只覆盖 `await` 到的 Promise。没有被 `await` 的"漂浮 Promise"（fire-and-forget）不在保护范围内，ESLint 的 `no-floating-promises` 规则能挡住它们。
+
+`forEach` 的回调是 `async` 时不会被等待：`arr.forEach(async x => await f(x))` 会立刻返回，所有任务并发且无人处理错误。要顺序执行用 `for...of`，要并发用 `map` + `Promise.all`。
+
+最后，`await` 一个非 Promise 的值仍然会让出一个微任务周期；在极热的循环里这会带来可观开销，此时应该避免不必要的 `await`。
+
+## 面试回答
+
+`async` 函数总是返回 Promise：正常返回值被包装成兑现，抛出的异常变成拒绝，所以它和 Promise 是同一套语义的两种语法。`await` 把函数暂停在当前位置，将后续代码注册成微任务，等待的值落定后恢复执行——`await` 之后的代码本质上就是回调，只是写起来像同步。
+
+它最大的价值是让拒绝变成可以被 `try/catch` 捕获的异常，栈追踪也更完整。但有两个坑：一是 `try` 块里直接 `return` 一个 Promise 而不加 `await`，函数会在它落定前返回，`catch` 和 `finally` 都失效；二是循环里逐个 `await` 会把并发变成串行——原因不是 `await` 本身，而是产生 Promise 的调用被推迟了，正确写法是先创建所有 Promise 再 `Promise.all`。
+
+错误处理我按层划分：数据访问层把技术错误转成带 `cause` 的领域错误并重新抛出，协调层决定重试或降级，界面层统一展示，最外面用 `unhandledrejection` 和错误边界兜底。绝不在每个函数里写一个 `try/catch` 然后吞掉异常。
+
+## 深度追问
+
+1. **循环里的 `await` 为什么串行，怎么改？** 因为下一次 `fetchOne(id)` 的调用发生在上一次 `await` 恢复之后，请求根本没有同时发出。改法是先 `map` 出所有 Promise（此时全部已启动）再 `await Promise.all`，或者用并发池限制数量。
+2. **`return await p` 和 `return p` 的区别？** 在 `try`/`finally` 内部，`return p` 会让函数立即返回，Promise 的拒绝发生在函数作用域之外，`catch` 接不到、`finally` 提前执行；`return await p` 会等待落定，异常才在当前作用域内抛出。在 `try` 外部两者行为等价，只差一个微任务。
+3. **异步异常的栈追踪有什么不同？** 抛出时同步栈已经展开，早期引擎只能给出很浅的栈。现代 V8 的零成本异步栈追踪会把 `await` 链接起来，所以 `async`/`await` 的可观测性优于 `.then` 链；但跨 `setTimeout`、事件回调的边界仍然会断，需要在抛出点补充上下文（`cause`、请求 ID）。
+
+## 关联专题
+
+- [Promise 状态机与组合](/topics/promise-semantics)：`await` 背后的状态机与组合器。
+- [请求取消与竞态](/topics/abort-race)：跨 `await` 之后世界已经变了，如何安全地丢弃过期结果。
+- [前端错误监控与稳定性](/topics/error-monitoring)：全局兜底与上报口径。
+
+## 资料来源
+
+- [MDN — async function](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function)
+- [ECMAScript — Async Function Definitions](https://tc39.es/ecma262/#sec-async-function-definitions)

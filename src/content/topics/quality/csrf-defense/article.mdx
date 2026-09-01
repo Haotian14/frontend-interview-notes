@@ -1,0 +1,134 @@
+# CSRF 与身份凭证
+
+## 一句话结论
+
+CSRF 成立的唯一前提是"浏览器会自动携带凭证，而同源策略只挡读不挡发"；防御要叠加三层——`SameSite` Cookie、与会话绑定的令牌、服务端源校验——任何一层都不足以单独承担。
+
+## 前置知识
+
+请先阅读[浏览器存储与 Cookie](/topics/web-storage-cookies)和[同源策略与 CORS](/topics/cors-cross-origin)。理解"跨源请求可以发出但读不到响应"这一点，是理解 CSRF 的全部关键。
+
+## 核心机制
+
+### 攻击是怎么成立的
+
+用户登录了 `bank.example`，会话 Cookie 存在浏览器里。用户随后访问了攻击者的页面：
+
+```html
+<!-- 攻击者页面：用户一打开就自动提交 -->
+<form action="https://bank.example/transfer" method="POST" id="f">
+  <input name="to" value="attacker" />
+  <input name="amount" value="10000" />
+</form>
+<script>document.getElementById('f').submit();</script>
+```
+
+浏览器发出这个 POST 时**会带上 `bank.example` 的 Cookie**（如果没有 `SameSite` 保护）。服务端看到合法会话，执行转账。攻击者因为同源策略读不到响应，但**副作用已经发生**——这正是 CSRF 与 XSS 的区别：XSS 是"以你的身份在你的页面里执行代码"，CSRF 是"以你的身份从别处发一个请求"。
+
+图片标签同样可以发起 GET：`<img src="https://bank.example/logout">`。所以**GET 绝不能产生副作用**是一条基本纪律。
+
+### 第一层：SameSite Cookie
+
+```http
+Set-Cookie: session=…; HttpOnly; Secure; SameSite=Lax; Path=/
+```
+
+- `Lax`（现代浏览器默认）：只有**顶级导航的 GET** 会携带；跨站的 POST、`iframe`、`img`、`fetch` 都不带。上面那个自动提交表单立刻失效。
+- `Strict`：任何跨站请求都不带，包括用户主动点击的外站链接——安全但入口体验受影响。
+- `None`：跨站也带，必须配 `Secure`；只在确实需要被第三方嵌入时使用，此时必须有其它防御。
+
+这一层挡掉了绝大多数经典 CSRF，但**不能作为唯一防线**：
+
+- 依赖浏览器实现与版本，老客户端、部分 WebView 行为不一致。
+- `SameSite` 的边界是**站点**（registrable domain）而不是源，所以 `evil.example.com` 与 `app.example.com` 属于同站，子域被攻陷时不受保护。
+- 需要 `SameSite=None` 的业务（第三方嵌入、支付跳转）完全失去这层保护。
+
+### 第二层：与会话绑定的令牌
+
+**同步器令牌（Synchronizer Token）**：服务端为每个会话生成随机令牌，渲染进页面；前端提交时放进请求头或请求体，服务端比对。
+
+```js
+// 前端：从 meta 标签或接口拿到令牌，随每个写请求发送
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+
+await fetch('/api/transfer', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+  credentials: 'include',
+  body: JSON.stringify({ to, amount }),
+});
+```
+
+它有效的原因很简单：**攻击者能让浏览器发请求，但读不到目标站点的页面内容**，因此拿不到令牌。
+
+**双提交 Cookie（Double Submit）**：无状态变体。服务端下发一个非 `HttpOnly` 的令牌 Cookie，前端读取后同时放进请求头，服务端比对两者是否一致。攻击者虽然能让浏览器带上 Cookie，但无法读取它的值来填进请求头。更稳的做法是把令牌与会话签名绑定（signed double submit），避免子域写入 Cookie 造成的伪造。
+
+令牌的实现要点：足够的随机性、与会话绑定、有过期时间、放在请求头而不是 URL（URL 会进日志和 Referer）。
+
+### 第三层：服务端校验来源
+
+```text
+Origin: https://app.example.com     ← 现代浏览器在跨源与 POST 时都会发送
+Referer: https://app.example.com/x  ← 可能因隐私策略被裁剪或缺失
+```
+
+服务端对写操作校验 `Origin`（缺失时回退 `Referer`），不匹配白名单直接拒绝。实现最简单，但要明确"两者都缺失时怎么办"——严格拒绝更安全，宽松放行等于没做。
+
+### 附带的一层：自定义请求头
+
+跨站请求要携带 `X-Requested-With` 之类的自定义头就必须触发 CORS 预检，而预检需要服务端明确允许。因此"要求所有写接口带一个自定义头"本身就构成一道弱防御。注意这依赖服务端**不要**用 `Access-Control-Allow-Headers: *` 敞开。
+
+### 容易被忽略的两个变体
+
+- **登录 CSRF**：攻击者让受害者以**攻击者的账号**登录，之后受害者的操作记录都进了攻击者账号。登录接口同样需要 CSRF 防御。
+- **JSON 接口不是天然安全的**：`Content-Type: application/json` 会触发预检，但用表单以 `text/plain` 提交 JSON 字符串仍可能被某些宽松的服务端接受。服务端应严格校验 `Content-Type`。
+
+## 项目应用
+
+1. 会话 Cookie 一律 `HttpOnly; Secure; SameSite=Lax`，敏感系统用 `Strict`，并加 `__Host-` 前缀防止子域覆写。
+2. 所有非幂等接口（POST/PUT/PATCH/DELETE）要求 CSRF 令牌，放在请求头里，由 HTTP 客户端统一注入而不是每个调用点手写。
+3. 服务端对写操作强制校验 `Origin`，白名单化，缺失即拒绝。
+4. 严格遵守 HTTP 方法语义：GET 只读、可缓存、无副作用。把"点击链接就退出登录"这类写法当作 bug 修掉。
+5. 转账、改密码、改绑手机这类操作加二次验证（重新输入密码、短信或 TOTP），把单纯的请求伪造挡在业务层之外。
+6. 用纯令牌鉴权（`Authorization` 头 + 内存中的访问令牌）的接口天然不受 CSRF 影响，因为凭证不会被浏览器自动携带——但要接受它带来的 XSS 风险权衡。
+
+## 边界与反例
+
+"设了 `SameSite=Lax` 就不用 CSRF token 了"是当前最常见的过度自信。子域被攻陷、需要 `SameSite=None` 的业务、老旧客户端都会让它失效；纵深防御的意义就是不押注单一机制。
+
+"CORS 能防 CSRF"是把两件事搞反了。CORS 管的是**能不能读响应**，而 CSRF 只需要请求被执行；表单提交、`img`、`script` 这些跨站请求根本不受 CORS 约束。
+
+"把令牌放在 URL 里也一样"不成立：URL 会出现在浏览器历史、服务器日志、`Referer` 头和第三方分析里，令牌因此泄露。
+
+"有了验证码就安全了"只在验证码覆盖每一个写操作时成立，实际上会严重损害体验；验证码适合注册、登录、高危操作，不适合普遍防御。
+
+最重要的边界：**存在 XSS 时所有 CSRF 防御都失效**。注入的脚本运行在你的源里，能读到令牌、能读到页面、能直接发同源请求。所以 CSRF 防御必须建立在 XSS 已被处理的前提上，见[XSS 防御与内容安全策略](/topics/xss-defense)。
+
+## 面试回答
+
+CSRF 的前提是浏览器会自动为请求带上 Cookie，而同源策略**只限制读取不限制发送**。攻击者在自己的页面上构造一个指向目标站点的表单或图片请求，用户的登录凭证就被自动带上，服务端当作合法操作执行；攻击者读不到响应，但转账、改密码这类副作用已经发生。
+
+防御分三层。第一层是 `SameSite` Cookie，`Lax` 已是现代浏览器默认，跨站的 POST 和子资源请求不带凭证，挡掉绝大多数经典攻击；但它依赖浏览器版本，边界是站点而非源，子域被攻陷时不受保护，需要 `SameSite=None` 的业务也完全失去它，所以不能作为唯一防线。
+
+第二层是 **CSRF 令牌**：服务端下发一个与会话绑定的随机值，前端提交时放进请求头，服务端比对。它有效是因为攻击者能让浏览器发请求，却读不到目标页面的内容。无状态服务可以用双提交模式，把令牌同时放进 Cookie 和请求头做比对，更稳的版本会对令牌签名绑定会话。
+
+第三层是服务端校验 `Origin`（回退 `Referer`），白名单化，缺失即拒绝。
+
+另外两条纪律：GET 绝不产生副作用；敏感操作加二次验证。最后要强调，存在 XSS 时所有 CSRF 防御都失效，因为注入的脚本能直接读到令牌。
+
+## 深度追问
+
+1. **为什么 `SameSite=Lax` 不能单独用？** 它的隔离边界是"站点"而不是"源"，同一注册域下的子域属于同站，子域被攻陷即失效；老浏览器与部分 WebView 的默认行为不一致；需要被第三方嵌入的业务必须用 `None`，此时保护完全消失。纵深防御要求再叠加令牌与源校验。
+2. **CSRF 令牌为什么拿不到？双提交怎么工作？** 因为同源策略禁止攻击者读取目标站点的页面内容和响应，令牌只存在于受害者能看到、攻击者看不到的地方。双提交模式下服务端不存状态：令牌同时放在 Cookie 和请求头里，攻击者虽然能让浏览器自动带上 Cookie，却无法读取其值填进请求头，比对因此失败。
+3. **为什么有 XSS 就没有 CSRF 防御？** XSS 让攻击者的脚本运行在你的源内，它可以读取页面里的令牌、读取非 `HttpOnly` 的 Cookie、并以同源身份直接发起请求——所有依赖"攻击者读不到"的防御前提全部瓦解。因此 XSS 的优先级永远高于 CSRF。
+
+## 关联专题
+
+- [浏览器存储与 Cookie](/topics/web-storage-cookies)：`SameSite` 与凭证存放位置的选择。
+- [同源策略与 CORS](/topics/cors-cross-origin)："能发不能读"是攻击成立的根本。
+- [XSS 防御与内容安全策略](/topics/xss-defense)：更高优先级的前置问题。
+
+## 资料来源
+
+- [OWASP — Cross-Site Request Forgery Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)
+- [MDN — SameSite cookies](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie/SameSite)

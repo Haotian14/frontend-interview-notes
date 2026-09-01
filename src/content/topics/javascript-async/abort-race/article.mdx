@@ -1,0 +1,154 @@
+# 请求取消与竞态
+
+## 一句话结论
+
+响应到达的顺序不等于请求发出的顺序；要么用 `AbortController` 真正取消旧请求，要么给请求编号只采纳最新一次的结果——两者通常一起用。
+
+## 前置知识
+
+请先阅读[async/await 与错误处理](/topics/async-await-errors)，理解跨 `await` 之后"世界已经变了"这一前提。本文默认读者写过搜索联想、分页切换或标签页切换这类会连续发起请求的界面。
+
+## 核心机制
+
+### 竞态从哪里来
+
+```js
+// 反例：每次输入都发请求，谁后到谁说了算
+input.addEventListener('input', async event => {
+  const data = await search(event.target.value);
+  render(data);   // 可能是 'ab' 的结果覆盖了 'abc' 的结果
+});
+```
+
+网络延迟是随机的。用户输入 `a`、`ab`、`abc` 三次，完全可能按 `abc`、`a`、`ab` 的顺序返回，界面最终停在 `ab` 的结果上。这个 bug 在本地开发（延迟稳定且低）几乎不会出现，在弱网下却很常见。
+
+### 方案一：真正取消
+
+```js
+let controller;
+
+async function search(term) {
+  controller?.abort();                 // 取消上一次
+  controller = new AbortController();
+
+  try {
+    const response = await fetch(`/api/search?q=${encodeURIComponent(term)}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    render(await response.json());
+  } catch (err) {
+    if (err.name === 'AbortError') return;   // 主动取消，不是错误
+    showError(err);
+  }
+}
+```
+
+要点：
+
+- 被取消的 `fetch` 会以 `AbortError` 拒绝。**必须识别并静默忽略**，否则错误监控里会堆满噪音。
+- `signal` 也可以传给 `addEventListener` 的选项对象，`abort()` 时会一次性移除所有用该 signal 注册的监听器——这是清理逻辑的利器。
+- 超时不必手写 `setTimeout`：`AbortSignal.timeout(5000)`；多个条件用 `AbortSignal.any([userSignal, AbortSignal.timeout(5000)])` 组合。
+- 自己写的异步流程也应当接受 `signal` 参数，在每个检查点调用 `signal.throwIfAborted()`。
+
+### 方案二：忽略过期结果
+
+有些场景无法取消（正在解析的大 JSON、WebSocket 消息、第三方 SDK），此时用序号：
+
+```js
+let latestRequestId = 0;
+
+async function search(term) {
+  const requestId = ++latestRequestId;
+  const data = await fetchSearch(term);
+  if (requestId !== latestRequestId) return;   // 已经不是最新一次，丢弃
+  render(data);
+}
+```
+
+或者用"当前查询词"做比对：`if (term !== input.value) return;`。两种写法的共同点是：**在写入共享状态之前，重新验证这次结果是否仍然有效**。
+
+### 在 React 里
+
+```jsx
+useEffect(() => {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const data = await fetchUser(id, { signal: controller.signal });
+      setUser(data);
+    } catch (err) {
+      if (err.name !== 'AbortError') setError(err);
+    }
+  })();
+
+  return () => controller.abort();   // 依赖变化或卸载时取消
+}, [id]);
+```
+
+清理函数在两种情况下运行：依赖变化前、组件卸载时。开发模式的 StrictMode 会额外挂载一次，正是为了暴露"没写清理"的问题。注意 `setState` 本身在卸载后是安全的（React 18 起不再警告），但继续跑无意义的工作和把过期数据写进全局缓存仍然是错误。
+
+数据请求库（TanStack Query、SWR、RTK Query）已经内建了取消、去重、过期判定和缓存，业务代码里手写这套逻辑通常是重复劳动。
+
+### 与防抖、重试的组合
+
+顺序是：**先防抖，再取消，最后重试**。
+
+```js
+const run = debounce(async term => {
+  controller?.abort();
+  controller = new AbortController();
+  await withRetry(() => search(term, controller.signal), { retries: 2 });
+}, 300);
+```
+
+防抖减少请求数量（用户还在打字时不发），取消处理"已经发出但不再需要"的请求，重试只针对网络抖动这类可恢复错误——而且重试必须检查 `signal.aborted`，否则会在取消后继续发请求。防抖的实现细节见[防抖与节流的实现与取舍](/topics/debounce-throttle)。
+
+## 项目应用
+
+1. 所有随用户输入或路由变化重复发起的请求，默认接上 `AbortController`。
+2. 数据层函数统一接受 `{ signal }` 参数并向下透传，让取消能力贯穿整条调用链，而不是只在最外层。
+3. 错误处理里第一件事就是过滤 `AbortError`（以及 `err.name === 'TimeoutError'`），避免污染监控数据。
+4. 副作用型请求（下单、支付、扣款）**不要依赖取消保证安全**：服务端可能已经收到并执行。用幂等键让重复请求安全，用状态查询确认最终结果。
+5. 长任务（大文件解析、Worker 计算、轮询）也接受 signal，在循环里检查 `signal.aborted` 主动退出。
+6. 用 DevTools 的网络限速模拟弱网，把接口延迟随机化，才能在开发阶段复现竞态。
+
+## 边界与反例
+
+"取消了请求，服务端就不会执行"是错的。`abort()` 关闭的是本地连接和响应处理，请求可能早已到达并被执行；HTTP 层面没有可靠的"撤销"。因此取消是**性能与一致性优化，不是事务控制**。
+
+"用了 `AbortController` 就不会有竞态"也不完全对。取消是异步的，极端情况下旧响应可能已经在微任务队列里；对关键渲染路径，取消与序号校验一起用最稳。
+
+"`Promise.race` 加超时等于取消"是常见误解：`race` 只是不再等待，底层请求继续消耗资源。正确写法是 `AbortSignal.timeout` 或在超时后显式 `abort()`。
+
+`AbortError` 不应被当作失败上报，但也不该被完全静默——如果一个页面上出现大量取消，说明请求触发得太频繁，应当加防抖或提高触发门槛。
+
+最后，被取消的请求在 Network 面板显示为 `(canceled)`，容易被误判为"接口挂了"；排查线上问题时要先确认是主动取消还是真实失败。
+
+## 面试回答
+
+竞态的本质是**响应到达顺序不等于请求发出顺序**，所以只要界面直接用最后到达的响应渲染，就可能显示过期数据。解法有两类。
+
+第一类是真正取消：用 `AbortController` 生成 `signal` 传给 `fetch`，发起新请求前先 `abort()` 上一个。被取消的请求以 `AbortError` 拒绝，必须在 `catch` 里识别并忽略，而不是当成错误上报。好处是同时省下带宽和服务端压力；局限是取消只是尽力而为，服务端可能已经执行了副作用，所以写操作要靠幂等键而不是取消。
+
+第二类是忽略过期结果：给每次请求分配递增序号或记录当前查询词，响应回来后先比对，不是最新的就丢弃。这适用于无法取消的场景，也可以和第一类叠加使用。
+
+React 里两种做法都放在 effect 的清理函数里，因为依赖变化和卸载都会触发它。补充一点：`AbortSignal` 不只用于 `fetch`，`addEventListener` 也接受 `signal` 选项，一次 `abort()` 就能移除一批监听器；超时用 `AbortSignal.timeout`，多条件用 `AbortSignal.any` 组合。
+
+## 深度追问
+
+1. **取消后服务端会停止处理吗？** 不保证。`abort()` 只是断开本地的响应处理，请求可能已经送达并执行完毕。所以取消适用于查询类请求的性能优化，写操作必须靠幂等设计和状态查询来保证正确性。
+2. **除了取消还有什么办法？** 请求序号或查询词比对：在写入状态前验证这次响应是否仍然对应最新一次请求。也可以把响应写进以查询词为键的缓存，界面只读取当前查询词对应的那一项——这就是数据请求库的做法。
+3. **怎么和防抖、重试组合？** 顺序是防抖 → 取消 → 重试。防抖减少发起次数，取消丢弃不再需要的在途请求，重试只处理可恢复的网络错误，并且每次重试前都要检查 `signal.aborted`，否则取消之后还会继续发请求。
+
+## 关联专题
+
+- [async/await 与错误处理](/topics/async-await-errors)：跨 `await` 之后需要重新验证的所有假设。
+- [Promise 状态机与组合](/topics/promise-semantics)：为什么 `race` 不等于取消。
+- [防抖与节流的实现与取舍](/topics/debounce-throttle)：减少请求数量的第一道闸门。
+
+## 资料来源
+
+- [MDN — AbortController](https://developer.mozilla.org/en-US/docs/Web/API/AbortController)
+- [DOM Standard — Aborting ongoing activities](https://dom.spec.whatwg.org/#aborting-ongoing-activities)

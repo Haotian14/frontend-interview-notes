@@ -1,0 +1,172 @@
+# 条件类型与映射类型
+
+## 一句话结论
+
+条件类型是类型层的三元表达式，映射类型是类型层的遍历；两者加上 `infer` 和模板字面量类型，构成了"从一份真实数据源派生所有相关类型"的能力，而分布式行为是其中最容易踩错的一条规则。
+
+## 前置知识
+
+请先阅读[泛型与约束](/topics/generics-constraints)。本文的所有写法都建立在类型参数与 `extends` 约束之上；如果 `K extends keyof T` 还不熟悉，先回到那一篇。
+
+## 核心机制
+
+### 条件类型与分布式
+
+```ts
+type IsString<T> = T extends string ? true : false;
+
+type A = IsString<'a'>;              // true
+type B = IsString<number>;           // false
+type C = IsString<'a' | number>;     // boolean ← 分发后是 true | false
+```
+
+**分布式条件类型**的触发条件是：被检查的类型是一个**裸的类型参数**（没有被包在数组、元组、函数等结构里），且实参是联合类型。此时条件会对联合的每个成员分别求值，再把结果联合起来。
+
+这正是内置工具类型的实现原理：
+
+```ts
+type Exclude<T, U> = T extends U ? never : T;
+type Extract<T, U> = T extends U ? T : never;
+type NonNullable<T> = T & {};
+
+type Status = 'idle' | 'loading' | 'error';
+type Settled = Exclude<Status, 'loading'>;   // 'idle' | 'error'
+```
+
+不想要分发时，把两侧各包一层元组：
+
+```ts
+type IsUnionMemberString<T> = T extends string ? true : false;
+type IsWholeString<T> = [T] extends [string] ? true : false;
+
+type D = IsUnionMemberString<'a' | number>;  // boolean
+type E = IsWholeString<'a' | number>;        // false ← 整体判断
+```
+
+一个实用例子是判断 `never`：因为 `never` 是空联合，分发时会直接得到 `never`，必须关闭分发：
+
+```ts
+type IsNever<T> = [T] extends [never] ? true : false;
+```
+
+### infer 捕获类型
+
+`infer` 只能出现在条件类型的 `extends` 子句里，作用是"在这个位置放一个占位符，匹配成功后把它绑定的类型交给真分支"：
+
+```ts
+type MyReturnType<T> = T extends (...args: never[]) => infer R ? R : never;
+type MyParameters<T> = T extends (...args: infer P) => unknown ? P : never;
+type ElementOf<T> = T extends readonly (infer E)[] ? E : never;
+
+type Unwrap<T> = T extends Promise<infer V> ? Unwrap<V> : T;   // 递归解包
+```
+
+实践中优先用内置的 `ReturnType`、`Parameters`、`Awaited`、`InstanceType`，它们处理了重载、`this` 参数等边界情况。
+
+### 映射类型
+
+```ts
+type Partial<T> = { [K in keyof T]?: T[K] };
+type Required<T> = { [K in keyof T]-?: T[K] };
+type Readonly<T> = { readonly [K in keyof T]: T[K] };
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+```
+
+`+`/`-` 修饰符负责添加与移除 `readonly` 和 `?`。加上 `as` 子句可以**重映射键名**：
+
+```ts
+type Getters<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type User = { id: number; name: string };
+type UserGetters = Getters<User>;
+// { getId: () => number; getName: () => string }
+
+// 用 never 作为新键名可以过滤属性
+type OmitByType<T, U> = {
+  [K in keyof T as T[K] extends U ? never : K]: T[K];
+};
+type WithoutFunctions = OmitByType<{ a: number; run: () => void }, Function>;
+// { a: number }
+```
+
+### 模板字面量类型
+
+```ts
+type EventName<T extends string> = `on${Capitalize<T>}`;
+type Route = `/users/${string}`;
+
+// 也能反向解析
+type ParamOf<T> = T extends `${string}:${infer P}/${string}` ? P : never;
+type P = ParamOf<'/users/:id/orders'>;   // 'id'
+```
+
+配合 `Uppercase`、`Lowercase`、`Capitalize`、`Uncapitalize` 四个内置操作，可以为事件名、CSS 变量名、路由路径这类"有模式的字符串"建立类型约束，把拼写错误挡在编译期。
+
+### 从单一数据源派生
+
+最实用的组合是：定义一份**值**，用 `as const` 固化，再从它派生所有类型。
+
+```ts
+const routes = {
+  home: '/',
+  user: '/users/:id',
+  settings: '/settings',
+} as const;
+
+type RouteKey = keyof typeof routes;             // 'home' | 'user' | 'settings'
+type RoutePath = (typeof routes)[RouteKey];      // '/' | '/users/:id' | '/settings'
+
+const permissions = ['read', 'write', 'admin'] as const;
+type Permission = (typeof permissions)[number];  // 'read' | 'write' | 'admin'
+```
+
+这样运行时和编译期共享同一份定义，加一项路由不需要同步改两处，也不会漏改。
+
+## 项目应用
+
+1. 枚举类的常量一律写成 `as const` 对象或数组，类型用 `typeof` 派生，避免"值和类型两份定义"漂移。
+2. 接口层用映射类型做转换：`Partial` 表示补丁请求体，`Pick`/`Omit` 裁剪出列表项类型，`Readonly` 标记不可变状态。
+3. 事件系统用模板字面量类型约束事件名，并用映射类型把事件名映射到载荷类型，`emit('user:created', payload)` 的两个参数会互相校验。
+4. 表单库、表格库的列定义用 `K extends keyof T` 加索引访问，让 `dataIndex` 与渲染函数的参数类型对齐。
+5. 复杂类型加注释和类型测试。没有测试的类型工具在升级 TypeScript 时会静默变化。
+6. 编译变慢时用 `tsc --generateTrace` 或 `--diagnostics` 定位，通常是某个递归条件类型在大联合上展开。
+
+## 边界与反例
+
+"能用类型表达就一定要用类型表达"是类型体操最大的陷阱。类型系统是图灵完备的，但复杂类型的报错信息几乎不可读，团队里只有作者能维护。**优先考虑改变数据结构**，往往比写一个五十行的条件类型更好。
+
+分布式行为经常被误判成 bug：`Exclude<'a' | 'b', 'a'>` 得到 `'b'` 是分发的结果；而 `[T] extends [U]` 是整体判断。写条件类型前先问一句"这里希望分发吗"。
+
+`keyof` 对索引签名类型返回 `string | number`，对 `any` 返回 `string | number | symbol`；映射 `Record<string, X>` 时不会得到具体键名。
+
+条件类型对**联合的空集**（`never`）分发得到 `never`，这常让 `T extends ... ? ... : ...` 在传入 `never` 时给出意外结果，判断 `never` 必须关闭分发。
+
+递归类型有深度上限，超过会报"类型实例化过深"。处理长字符串或深层对象时要设置递归深度守卫。
+
+最后，这些都只是**编译期**的东西。类型在运行时完全擦除，不要指望映射类型能校验接口返回的数据；边界校验仍然要靠运行时 schema。
+
+## 面试回答
+
+条件类型的形式是 `T extends U ? X : Y`，可以理解成类型层的三元表达式。最关键也最容易踩的规则是**分布式**：当被检查的类型是裸的类型参数且实参是联合类型时，条件会对每个成员分别求值再合并结果——这就是 `Exclude` 和 `Extract` 的实现原理。不想分发时把两边各包一层元组写成 `[T] extends [U]`，判断 `never` 就必须这么写。
+
+`infer` 用于在真分支里捕获类型，`ReturnType`、`Parameters`、`Awaited` 都靠它实现。映射类型是遍历 `keyof` 生成新对象类型，`as` 子句可以重映射键名，用 `never` 作为新键名还能过滤属性；`+`/`-` 修饰符负责添加或移除 `readonly` 和 `?`，`Partial` 和 `Required` 就是这样定义的。模板字面量类型让键名可以按模式拼接与匹配。
+
+我在项目里主要用它们做三件事：从 `as const` 的单一数据源派生类型、给事件名和路由这类字符串加约束、把接口结构映射成前端模型。但会克制使用——过深的递归会拖慢编译并产生几乎无法阅读的报错，很多时候改数据结构比写复杂类型更划算。
+
+## 深度追问
+
+1. **什么是分布式条件类型，怎么关闭？** 当条件类型中被检查的是裸类型参数、实参又是联合类型时，条件会对每个联合成员分别求值并合并结果。把两侧写成 `[T] extends [U]` 即可关闭，因为此时被检查的不再是裸类型参数。
+2. **`infer` 怎么实现 `ReturnType`？** `type ReturnType<T> = T extends (...args: never[]) => infer R ? R : never`：用 `infer R` 在返回值位置放占位符，匹配成功后 `R` 被绑定为实际返回类型，交给真分支使用。
+3. **类型体操写复杂了有什么代价？** 编译时间上升（递归条件类型在大联合上会指数展开）、报错信息不可读、TypeScript 版本升级时行为可能变化、团队里只有作者敢改。合理的边界是：类型工具应当能被一两句话解释清楚，否则考虑调整运行时数据结构。
+
+## 关联专题
+
+- [泛型与约束](/topics/generics-constraints)：条件与映射类型都建立在类型参数之上。
+- [结构化类型与型变](/topics/structural-variance)：`extends` 判定的赋值兼容规则。
+
+## 资料来源
+
+- [TypeScript Handbook — Conditional Types](https://www.typescriptlang.org/docs/handbook/2/conditional-types.html)
+- [TypeScript Handbook — Mapped Types](https://www.typescriptlang.org/docs/handbook/2/mapped-types.html)

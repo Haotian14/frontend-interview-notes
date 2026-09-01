@@ -45,7 +45,7 @@ export default defineConfig(({ isSsrBuild, mode }) => ({
               compatibility_date: '2026-05-22',
               assets: {
                 binding: 'ASSETS',
-                html_handling: 'auto-trailing-slash',
+                html_handling: 'drop-trailing-slash',
                 not_found_handling: '404-page',
               },
             },
@@ -84,5 +84,7 @@ export default defineConfig(({ isSsrBuild, mode }) => ({
     css: true,
     globals: true,
     exclude: [...configDefaults.exclude, 'tests/e2e/**'],
+    // 内容合同会逐篇渲染全部专题；专题数量增长后 5 秒的默认上限不够用。
+    testTimeout: 60_000,
   },
 }));

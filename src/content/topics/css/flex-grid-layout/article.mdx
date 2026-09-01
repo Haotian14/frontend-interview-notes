@@ -1,0 +1,160 @@
+# Flexbox 与 Grid 布局模型
+
+## 一句话结论
+
+Flexbox 解决一维排布与剩余空间分配，Grid 解决二维轨道与位置；两者的对齐属性同源，而绝大多数"撑破容器"的问题都来自同一个原因——项目和轨道的最小尺寸默认等于内容最小尺寸。
+
+## 前置知识
+
+请先阅读[层叠、优先级与继承](/topics/cascade-specificity)，确认样式确实生效再讨论布局。本文默认读者理解盒模型、`box-sizing` 的影响，以及块级与行内格式化的基本差别。
+
+## 核心机制
+
+### 选型：维度决定模型
+
+- **Flexbox**：内容沿一条主轴排列，换行位置由内容和空间决定。导航栏、按钮组、卡片内部的图标与文字、"左内容右操作"的行布局都属于这类。
+- **Grid**：先画好行列，再把项目放进去。页面骨架、表单的标签列与控件列对齐、需要重叠的英雄区、复杂仪表盘属于这类。
+
+一个可靠的判断句：**如果你希望同一列的元素跨行也对齐，就是 Grid**。Flex 的换行行不知道彼此的列位置。
+
+### Flex：三个属性一条流水线
+
+```css
+.toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;       /* 交叉轴：垂直居中 */
+  justify-content: space-between; /* 主轴：两端对齐 */
+}
+
+.toolbar__title { flex: 1 1 0; min-width: 0; }
+.toolbar__actions { flex: 0 0 auto; }
+```
+
+分配过程分三步：
+
+1. **确定基准尺寸**。每个项目取 `flex-basis`；它是 `auto` 时回落到 `width`（或主轴对应的尺寸），再不行才用内容尺寸。
+2. **分配剩余空间**。容器剩余空间为正时，按 `flex-grow` 的比例分给各项目。
+3. **收缩超出部分**。剩余空间为负时，按 `flex-shrink × flex-basis` 的加权比例扣减——注意收缩是**加权**的，基准越大扣得越多，这样才不会把小项目先压没。
+
+因此常见简写的展开值必须记牢：
+
+- `flex: 1` → `1 1 0%`：基准归零，纯粹等分剩余空间，内容多少不影响最终宽度。
+- `flex: auto` → `1 1 auto`：以内容宽度为基准再分配，内容多的项目最终更宽。
+- `flex: none` → `0 0 auto`：不伸不缩，保持内容尺寸。
+- `flex: 0 1 auto`：这是**默认值**，能缩不能伸。
+
+`align-items: stretch` 是交叉轴默认值，所以等高卡片是免费的；`align-self` 用于单个项目例外。`margin-left: auto` 在 flex 容器里是把一个项目推到右侧的最简写法，比额外套一层 `justify-content` 更直接。
+
+### Grid：先有轨道，再放项目
+
+```css
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.page {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "sidebar header"
+    "sidebar main"
+    "sidebar footer";
+  min-height: 100dvh;
+}
+
+.page > header { grid-area: header; }
+.page > aside  { grid-area: sidebar; }
+.page > main   { grid-area: main; }
+```
+
+要点：
+
+- `fr` 分配的是**剩余空间**，不是总宽度。`200px 1fr 1fr` 里两个 `1fr` 平分减去 200px 之后的部分。
+- `minmax(min, max)` 给轨道一个区间；`minmax(240px, 1fr)` 表示"至少 240px，有空间就一起长大"。
+- `repeat(auto-fit, …)` 与 `repeat(auto-fill, …)` 的差别只在**空轨道**：`auto-fill` 保留放不下内容的空轨道，`auto-fit` 把它们塌陷掉，于是剩余的项目会占满整行。想要"最后一行拉伸铺满"用 `auto-fit`，想要"列宽稳定、位置对齐"用 `auto-fill`。
+- 项目可以用 `grid-column: 1 / -1` 跨到最后一条线，`-1` 表示显式网格的末端。
+- 没被显式放置的项目进入**隐式网格**，其尺寸由 `grid-auto-rows` / `grid-auto-columns` 决定；忘记设置时它们会按内容高度，常表现为"某一行忽然变矮"。
+
+### 对齐属性是共用的
+
+Flexbox 和 Grid 都实现了 Box Alignment：
+
+| 属性 | 作用轴 | 说明 |
+| --- | --- | --- |
+| `justify-content` | 主轴 / 行内轴 | 分配容器内**整体**的剩余空间 |
+| `align-content` | 交叉轴 / 块轴 | 多行（多轨道）之间的分布 |
+| `justify-items` / `align-items` | 单个单元格内 | Grid 常用；Flex 只有 `align-items` |
+| `justify-self` / `align-self` | 单个项目 | 覆盖容器设定 |
+| `place-items` / `place-content` | 简写 | 顺序是 `align` 在前、`justify` 在后 |
+
+居中一个元素的现代写法就是 `display: grid; place-items: center;`。
+
+### 溢出的真正原因
+
+这是面试和实战中最高频的一个坑。**flex 项目和 grid 项目的 `min-width` / `min-height` 初始值是 `auto`**，其含义是"不小于内容的最小尺寸"（最长的不可断词、图片的固有宽度、`overflow-x: auto` 的表格的完整宽度……）。于是：
+
+```css
+/* 长文本或表格会把容器撑破 */
+.item { flex: 1; }
+
+/* 允许被压缩到比内容还小 */
+.item { flex: 1; min-width: 0; }
+
+/* Grid 轨道的等价写法 */
+.layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+```
+
+`overflow: hidden`、`auto` 或 `scroll` 也会把最小尺寸改回 0，所以给内部容器加滚动往往"顺便"解决了溢出。文本还可以配合 `min-width: 0` + `text-overflow: ellipsis` 或 `overflow-wrap: anywhere`。
+
+## 项目应用
+
+1. 页面骨架用 Grid（`grid-template-areas` 可读性最好），组件内部用 Flex，不要为了统一而全用一种。
+2. 任何"可能装下长文本或表格"的伸缩容器，默认写上 `min-width: 0`；轨道默认写 `minmax(0, 1fr)`。这两条能消除大部分横向滚动条。
+3. 间距一律用 `gap`，不要用 `margin` 加 `:last-child` 清除；`gap` 不会在两端产生多余空白，也不受外边距折叠影响。
+4. 卡片网格优先用 `repeat(auto-fit, minmax(<最小可读宽度>, 1fr))`，可以少写一半媒体查询。
+5. 需要跨行对齐的表单用 Grid 的两列轨道，而不是给每个标签写固定宽度。
+6. 用逻辑属性（`margin-inline`、`padding-block`、`inset-inline-start`）替代 `left`/`right`，为 RTL 语言留出余地。
+
+## 边界与反例
+
+`flex: 1` 不等于"平分宽度"——它平分的是**剩余空间**。当项目有内边距、边框或 `flex-basis` 不为 0 时，最终宽度并不相等；真要等宽用 `flex: 1 1 0` 并确保 `box-sizing: border-box`。
+
+`justify-content` 只在**有剩余空间**时有效果。项目已经溢出时它什么都不做，此时用 `space-between` 反而会让人以为属性失效。
+
+Grid 的 `fr` 轨道默认最小值是 `auto`，所以 `1fr` 并不保证"最多占一半"；这正是需要 `minmax(0, 1fr)` 的原因。
+
+百分比高度依赖父元素的确定高度，在 flex/grid 里经常拿不到；用 `1fr` 轨道或 `align-items: stretch` 更可靠。视口单位优先用 `dvh`/`svh`，`100vh` 在移动端会被地址栏遮挡。
+
+绝对定位的子元素以最近的**定位祖先的内边距盒**为包含块，flex/grid 容器上的对齐属性对它无效——它已经脱离了流式布局的分配过程。
+
+最后，布局属性不参与继承，调试时不要指望父级的 `display: flex` 会"传下去"，相关规则见[层叠、优先级与继承](/topics/cascade-specificity)。
+
+## 面试回答
+
+选型看维度：只关心一个方向的排布、换行位置由内容决定，用 Flexbox；行和列需要同时对齐、需要命名区域或元素重叠，用 Grid。判断句是"跨行还要不要对齐"。
+
+Flex 的核心是三步：`flex-basis` 确定基准尺寸，`flex-grow` 按比例分配剩余空间，`flex-shrink` 按基准加权收缩超出部分。所以 `flex: 1` 展开是 `1 1 0%`，等分剩余空间、忽略内容宽度；`flex: auto` 是 `1 1 auto`，保留内容差异；默认值 `0 1 auto` 能缩不能伸。
+
+Grid 的核心是先定义轨道再放置项目，`fr` 分配剩余空间，`repeat(auto-fit, minmax(240px, 1fr))` 能不用媒体查询做响应式卡片；`auto-fit` 会塌陷空轨道，`auto-fill` 会保留。
+
+最高频的坑是溢出：flex 项目和 grid 项目的 `min-width` 初始值是 `auto`，等于内容最小尺寸，所以长单词或宽表格会撑破容器，解决办法是显式 `min-width: 0`，或把轨道写成 `minmax(0, 1fr)`。对齐属性两者共用 Box Alignment，`justify` 管内联轴、`align` 管块轴，`gap` 现在两边都支持。
+
+## 深度追问
+
+1. **`flex: 1` 和 `flex: auto` 的区别？** 前者是 `1 1 0%`，基准为零，最终宽度只由剩余空间的等分决定；后者是 `1 1 auto`，以内容宽度为基准再分配剩余空间，内容多的项目更宽。要做等宽栏用前者。
+2. **为什么 flex 子项会被内容撑破？** 因为 `min-width` 的初始值 `auto` 在 flex/grid 上下文中解析为"内容的最小尺寸"，收缩算法不会跨过这个下限。写 `min-width: 0` 或设置非 `visible` 的 `overflow` 都能解除这个下限。
+3. **`auto-fit` 和 `auto-fill` 有什么不同？** 两者都按可用空间尽可能多地创建轨道；`auto-fill` 保留没有项目的空轨道，`auto-fit` 把它们塌陷为 0 宽，于是剩余项目会被拉伸占满。项目数少时两者的视觉差别最明显。
+
+## 关联专题
+
+- [层叠、优先级与继承](/topics/cascade-specificity)：先确认样式生效，再讨论布局算法。
+- [BFC 与外边距折叠](/topics/bfc-margin-collapse)：flex 与 grid 容器不发生外边距折叠，理解普通流才能解释这个差异。
+
+## 资料来源
+
+- [MDN — CSS flexible box layout](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_flexible_box_layout)
+- [CSS Grid Layout Module Level 1](https://www.w3.org/TR/css-grid-1/)

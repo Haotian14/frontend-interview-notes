@@ -1,0 +1,176 @@
+# 泛型与约束
+
+## 一句话结论
+
+泛型是类型层面的函数：它的价值在于**建立参数与返回值之间的关系**，而不是让函数接受更多类型；一个只出现一次的类型参数等价于 `unknown`，只是看起来更专业。
+
+## 前置知识
+
+请先阅读[类型收窄与穷尽检查](/topics/type-narrowing)，理解类型在控制流中如何变化。本文默认读者写过带类型注解的函数，知道 `interface` 与 `type` 的基本用法。
+
+## 核心机制
+
+### 类型参数要出现两次
+
+判断一个泛型是否有意义，看类型参数出现的位置数：
+
+```ts
+// 反例：T 只出现一次，等价于 (value: unknown) => void
+function log<T>(value: T): void {
+  console.log(value);
+}
+
+// 有意义：T 连接了参数与返回值
+function identity<T>(value: T): T {
+  return value;
+}
+
+// 有意义：K 连接了两个参数与返回值
+function pick<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Pick<T, K> {
+  const result = {} as Pick<T, K>;
+  for (const key of keys) result[key] = obj[key];
+  return result;
+}
+```
+
+`pick` 的收益是具体的：传入不存在的键名会在**调用处**报错，返回值的形状随传入键名精确变化，而不是退化成 `any` 或 `Record<string, unknown>`。
+
+### 约束表达"至少是什么"
+
+`T extends U` 的含义是"`T` 必须可赋值给 `U`"。它有两个作用：限制调用方能传什么，以及让函数体内可以访问 `U` 的成员。
+
+```ts
+// 没有约束时无法访问 .length
+function longest<T extends { length: number }>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest('abcd', 'xy');       // string
+longest([1, 2, 3], [4]);     // number[]
+longest(10, 20);             // 报错：number 没有 length
+```
+
+最高频的组合是 `K extends keyof T` 加索引访问 `T[K]`：
+
+```ts
+function getIn<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const user = { id: 1, name: 'Ada', active: true };
+getIn(user, 'name');    // string
+getIn(user, 'active');  // boolean
+getIn(user, 'email');   // 报错：'email' 不在 keyof 里
+```
+
+对比 `function getIn(obj: object, key: string): unknown`——后者能编译，但把类型信息全丢了，调用方还得断言。
+
+### 推断来自实参
+
+类型参数通常不需要手写，TypeScript 从实参反推。因此**参数的写法直接决定推断结果**：
+
+```ts
+declare function toSet<T>(items: T[]): Set<T>;
+toSet([1, 2, 3]);              // Set<number>
+toSet(['a', 'b']);             // Set<string>
+toSet([1, 'a']);               // Set<string | number>
+
+// 字面量默认被放宽
+declare function tag<T extends string>(name: T): T;
+tag('primary');                // 'primary'，因为约束是 string 时保留字面量
+
+declare function wrap<T>(value: T): T[];
+wrap('primary');               // string[]，被放宽了
+
+// const 类型参数保留窄类型
+declare function keysOf<const T extends readonly string[]>(items: T): T[number];
+keysOf(['a', 'b']);            // 'a' | 'b'
+```
+
+`NoInfer<T>` 用于排除某个位置参与推断：
+
+```ts
+declare function createStore<T>(initial: T, reset: NoInfer<T>): void;
+// reset 不再影响 T 的推断结果，避免联合类型被意外放宽
+```
+
+### 泛型不是具体类型
+
+函数体内部的 `T` 是**未知的具体类型**，只能依赖约束提供的信息：
+
+```ts
+function bad<T extends object>(obj: T): T {
+  return { ...obj, extra: 1 };   // 报错：不能保证返回值仍是 T
+}
+```
+
+原因是调用方可能传入 `T` 的子类型，而返回值多了一个属性并不等于原来的 `T`。这类"感觉应该可以"的报错，几乎都是因为把类型参数当成了具体类型。正确做法是修改签名表达真实意图：
+
+```ts
+function withExtra<T extends object>(obj: T): T & { extra: number } {
+  return { ...obj, extra: 1 };
+}
+```
+
+### 泛型类型与默认参数
+
+```ts
+type ApiResult<TData, TError = Error> =
+  | { status: 'success'; data: TData }
+  | { status: 'failure'; error: TError };
+
+interface Repository<TEntity, TId extends string | number = string> {
+  findById(id: TId): Promise<TEntity | undefined>;
+  save(entity: TEntity): Promise<TEntity>;
+}
+```
+
+默认类型参数让常见用法省事，同时保留特殊场景的扩展点。注意默认值只在**调用方省略**时生效，不影响推断。
+
+## 项目应用
+
+1. **先写具体类型**。出现第二个几乎相同的签名时再抽象成泛型，过早泛型化会让签名难读、报错难懂。
+2. 需要"任意对象"时用 `Record<string, unknown>` 或 `object`，不要用 `any`；需要"我不关心"时用 `unknown` 而不是 `any`，前者强制调用方先收窄。
+3. 数据访问层用泛型连接请求与响应：`function request<TResponse>(path: string, init?: RequestInit): Promise<TResponse>`，但**必须在边界处做运行时校验**——泛型只是编译期的承诺，接口返回什么类型编译器无从得知。
+4. 组件 props 用泛型表达"列表项类型与渲染函数类型一致"：`<List items={users} renderItem={u => u.name} />`，这样 `u` 会被正确推断。
+5. 约束尽量窄：能写 `K extends keyof T` 就不要写 `K extends string`；能写 `readonly T[]` 就不要写 `T[]`（避免函数意外修改入参）。
+6. 复杂泛型写单元测试：用 `expectTypeOf` 或简单的 `const _check: Expected = value` 断言，确保重构时类型行为不退化。
+
+## 边界与反例
+
+"泛型让代码更通用"是一句危险的口号。通用的代价是签名复杂、报错信息深不可读；类型体操写得越花，团队维护成本越高。**一个泛型如果需要三行注释才能解释，通常说明抽象错了。**
+
+"约束越松越好用"也不对：`T extends any` 与不加约束等价，但会关闭很多推断优化；`T = any` 作为默认值会让所有省略调用退化成 `any`，把类型系统悄悄关掉。
+
+泛型是**编译期擦除**的：运行时拿不到 `T`，不能 `new T()`，也不能 `if (x instanceof T)`。需要运行时信息就得显式传入构造函数或判别字段。
+
+TypeScript 的类型系统是结构化的，`T extends U` 比较的是结构而非声明关系，这会带来一些反直觉的赋值结果，详见[结构化类型与型变](/topics/structural-variance)。
+
+最后，泛型不校验运行时数据。`response.json() as User` 只是断言；真正的边界校验要用 Zod、Valibot 之类的运行时 schema，并从 schema 推导类型，而不是反过来。
+
+## 面试回答
+
+泛型不是为了让函数"什么都能接受"，而是为了在参数与返回值之间建立可追踪的关系。判断一个类型参数是否必要有个简单标准：它至少要在两个位置出现，否则它等价于 `unknown`，只是看起来更专业。
+
+约束用 `extends` 表达，含义是"这个类型参数必须可赋值给约束类型"，它同时让函数体内能访问约束提供的成员。最常见的形式是 `K extends keyof T`，把键名限制在对象真实存在的键上，返回类型再用索引访问 `T[K]` 精确算出来——对比 `(obj: object, key: string) => unknown`，收益是错误提前到调用处。
+
+推断方面，TypeScript 从实参反推类型参数，所以参数写法直接决定推断结果：字面量默认被放宽成 `string`，需要保留窄类型要用 `const` 类型参数或 `as const`；还可以用默认类型参数让调用方省略，用 `NoInfer` 阻止某个位置参与推断。
+
+工程上我的原则是先写具体类型，出现第二个几乎相同的签名时再抽象；并且始终记住泛型是编译期的承诺，外部数据仍然需要运行时校验。
+
+## 深度追问
+
+1. **什么时候泛型参数是多余的？** 当它只在一个位置出现时。`function log<T>(v: T): void` 与 `(v: unknown) => void` 完全等价，泛型没有传递任何信息。反过来，只要类型参数连接了两个及以上位置（两个参数之间、参数与返回值之间），它就在做实事。
+2. **`K extends keyof T` 相比 `string` 的收益？** 编译期就能拒绝不存在的键名，返回类型可以用 `T[K]` 精确表达而不是 `unknown`，重命名属性时所有调用点自动报错。用 `string` 则把这些检查全部推迟到运行时。
+3. **为什么类型参数不能当具体类型用？** 因为调用方可能传入约束的任意子类型，函数体必须对所有可能的 `T` 都成立。给 `T` 加属性后返回值不再是 `T`，编译器拒绝是正确的；应当修改签名为 `T & { extra: number }` 来表达真实返回类型。
+
+## 关联专题
+
+- [类型收窄与穷尽检查](/topics/type-narrowing)：控制流如何改变类型。
+- [条件类型与映射类型](/topics/conditional-mapped-types)：在泛型基础上做类型层面的计算。
+- [结构化类型与型变](/topics/structural-variance)：`extends` 判定背后的赋值兼容规则。
+
+## 资料来源
+
+- [TypeScript Handbook — Generics](https://www.typescriptlang.org/docs/handbook/2/generics.html)
+- [TypeScript Handbook — Type Inference](https://www.typescriptlang.org/docs/handbook/type-inference.html)

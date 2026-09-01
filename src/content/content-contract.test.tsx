@@ -10,6 +10,13 @@ import { topicCatalog } from './catalog';
 import { chapters } from './chapters';
 import searchIndex from '../generated/search-index.json';
 import { getTopic, loadTopic, topics } from './registry';
+import { validatePractices } from './validate';
+import type { TopicPractice } from './types';
+
+// 运行时按需加载 practice.ts，这里只在测试中 eager 载入以便一次性校验全部专题。
+const practices = Object.values(
+  import.meta.glob<{ practice: TopicPractice }>('./topics/**/practice.ts', { eager: true }),
+).map(module => module.practice);
 
 // MDX 插件会在 ?raw 之前处理 .mdx，拿不到原文，因此直接读盘。
 const topicsDir = join(process.cwd(), 'src/content/topics');
@@ -52,6 +59,10 @@ describe('phase-one content contract', () => {
       .map(chapter => `${chapter.index} ${chapter.title}`);
 
     expect(empty, '章节页没有任何专题时读者会走进空页面').toEqual([]);
+  });
+
+  test('ships a valid practice file for every topic', () => {
+    expect(validatePractices(topics, practices).map(issue => issue.message)).toEqual([]);
   });
 
   test('uses valid topic relationships and HTTPS sources', () => {

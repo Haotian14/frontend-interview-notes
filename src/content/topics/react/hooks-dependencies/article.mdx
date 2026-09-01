@@ -1,0 +1,155 @@
+# Hooks 规则与依赖数组
+
+## 一句话结论
+
+Hooks 靠**调用顺序**定位状态，所以必须无条件地写在顶层；依赖数组是"这个 effect 用到了哪些渲染值"的**声明**而非性能开关；而大多数 effect 根本不该存在。
+
+## 前置知识
+
+请先阅读[React 渲染与状态快照](/topics/render-state-snapshot)，理解每次渲染都持有自己那一份 props 和 state。再看[作用域链与闭包](/topics/closures-scope)：effect 回调是一个闭包，它捕获的是**定义它的那次渲染**的变量，这是理解"闭包陷阱"的钥匙。
+
+## 核心机制
+
+### 为什么 Hooks 有顺序规则
+
+React 并不知道 `useState` 这个调用叫什么名字。它在组件的 fiber 上维护一条 Hook 链表，每次渲染按调用顺序依次取出对应的槽位：
+
+```jsx
+function Bad({ isLoggedIn }) {
+  if (isLoggedIn) {
+    const [name, setName] = useState('');   // 第一次渲染是第 1 个 Hook
+  }
+  const [count, setCount] = useState(0);    // 有时是第 2 个，有时是第 1 个
+}
+```
+
+一旦 `isLoggedIn` 变化，`count` 就会读到 `name` 的槽位。所以规则是：**只在组件函数或自定义 Hook 的顶层调用 Hook**，不能放进条件、循环、嵌套函数或提前 `return` 之后。需要条件逻辑时，把条件放进 Hook 内部，或者把组件拆成两个。
+
+`eslint-plugin-react-hooks` 的 `rules-of-hooks` 会静态检查这一点，应当设为 `error`。
+
+### 依赖数组是声明
+
+```jsx
+// 反例：漏了 count，回调永远看到首次渲染的 0
+useEffect(() => {
+  const id = setInterval(() => setCount(count + 1), 1000);
+  return () => clearInterval(id);
+}, []);
+
+// 修法一：函数式更新，不再依赖 count
+useEffect(() => {
+  const id = setInterval(() => setCount(c => c + 1), 1000);
+  return () => clearInterval(id);
+}, []);
+```
+
+依赖数组的含义是"effect 读取了哪些来自渲染的值"。漏写不会让 effect 变快，只会让它读到**过期的闭包变量**；多写则让 effect 频繁重建。
+
+正确的减少依赖方式是**改结构**，不是删数组项：
+
+- 用函数式更新 `setX(prev => ...)` 消除对当前 state 的依赖。
+- 把不依赖渲染的常量、配置、纯函数移到组件外部。
+- 把"每次渲染都新建"的对象和函数用 `useMemo`/`useCallback` 稳定，或者干脆把它们移进 effect 内部。
+- 需要读取最新值但不想触发重跑时，用 ref 保存（`useEffectEvent` 的实验性 API 就是为此设计的），但要克制——它会让数据流变得隐晦。
+
+`exhaustive-deps` 规则的警告几乎总是对的。压制它之前先确认自己能说清为什么。
+
+### 清理函数
+
+```jsx
+useEffect(() => {
+  const controller = new AbortController();
+  fetchUser(id, { signal: controller.signal }).then(setUser);
+  return () => controller.abort();
+}, [id]);
+```
+
+清理函数在**下一次 effect 运行前**和**卸载时**执行。凡是 effect 里建立了订阅、定时器、监听器、请求，就必须有对应的清理，否则会内存泄漏或产生竞态，详见[请求取消与竞态](/topics/abort-race)。
+
+开发环境的 `StrictMode` 会故意"挂载 → 卸载 → 再挂载"一次。这不是 bug，而是用来暴露缺失或不正确的清理逻辑；如果组件在两次挂载后行为异常，说明清理写得不完整。
+
+### 大多数 effect 不该存在
+
+React 官方的立场很明确：**effect 用于同步外部系统**（订阅、DOM 操作、网络、日志、第三方库），不是"渲染后再干点什么"的通用钩子。
+
+```jsx
+// 反例：用 effect 同步派生状态，多一次渲染，还可能连锁触发
+const [fullName, setFullName] = useState('');
+useEffect(() => { setFullName(`${first} ${last}`); }, [first, last]);
+
+// 正确：渲染中直接计算
+const fullName = `${first} ${last}`;
+
+// 反例：事件驱动的逻辑写进 effect
+useEffect(() => { if (submitted) postOrder(form); }, [submitted]);
+
+// 正确：写在事件处理器里
+function handleSubmit() { postOrder(form); }
+```
+
+对照表：
+
+| 需求 | 正确位置 |
+| --- | --- |
+| 由 props/state 算出来的值 | 渲染中直接计算，必要时 `useMemo` |
+| 用户操作触发的副作用 | 事件处理器 |
+| 订阅外部数据源 | `useSyncExternalStore` |
+| 请求数据 | 数据请求库，或带清理的 effect |
+| 测量 DOM 后同步调整 | `useLayoutEffect` |
+| props 变化时重置状态 | 给组件加 `key`，让 React 重建它 |
+
+### useLayoutEffect 与 ref
+
+`useEffect` 在浏览器绘制之后异步运行，`useLayoutEffect` 在绘制之前同步运行。只有"读取布局并立刻调整、否则会看到闪烁"的场景才用后者——它会阻塞绘制，滥用直接影响交互指标。服务端渲染时 `useLayoutEffect` 不执行并会警告。
+
+`useRef` 保存的是**跨渲染保持、且改变不触发渲染**的值：DOM 节点、定时器 id、上一次的值、可变实例。不要用它存应当驱动 UI 的状态。
+
+## 项目应用
+
+1. ESLint 里把 `rules-of-hooks` 设为 `error`、`exhaustive-deps` 设为 `warn` 并要求解释才能压制。
+2. 新写一个 `useEffect` 之前先问三个问题：这是在同步外部系统吗？能不能在渲染中算出来？能不能放进事件处理器？三个都否才写。
+3. 数据请求交给 TanStack Query、SWR 或框架的 loader，它们已经处理了缓存、去重、竞态、重试和失效，比手写 effect 可靠得多。
+4. 自定义 Hook 用来封装"一组相关的状态与副作用"，命名以 `use` 开头并保持单一职责；它同样受 Hooks 规则约束。
+5. 需要在 props 变化时重置内部状态，用 `key` 强制重建组件，而不是写 effect 去同步。
+6. 用 React DevTools Profiler 确认 effect 的实际触发次数，不要凭感觉判断。
+
+## 边界与反例
+
+"空依赖数组等于 componentDidMount"是误导。函数组件没有生命周期，只有"与外部系统的同步关系"；空数组只是说明"这个 effect 不依赖任何渲染值"，如果实际依赖了，那就是 bug。
+
+"依赖数组是性能优化"是最常见的误解。它是正确性声明，删项目换来的不是性能而是过期数据。
+
+"`useCallback` / `useMemo` 加上就更快"也不成立：它们本身有成本，且只有当依赖真正稳定、下游真正做了记忆化比较时才有意义，见[React 性能优化](/topics/react-performance)。
+
+`useRef` 的 `.current` 变化不会触发渲染，把需要展示的数据放进 ref 会导致界面不更新；反过来，把纯粹的实例数据放进 state 会导致多余渲染。
+
+`StrictMode` 的双调用只在开发环境发生，不要为了"消除"它而删掉清理函数——那是把体温计砸了。
+
+最后，effect 里直接 `setState` 并不总是错的（例如同步外部系统后写回结果），但如果它形成了"渲染 → effect → setState → 渲染"的链条来计算派生数据，就应当重构。
+
+## 面试回答
+
+Hooks 的两条规则来自实现方式：React 用**调用顺序**而不是名字把每次渲染的 Hook 与内部链表槽位对应起来，所以必须在组件或自定义 Hook 的顶层无条件调用，条件、循环、提前 `return` 都会让顺序错位。
+
+依赖数组的正确读法是"这个 effect 用到了哪些来自渲染的值"，它是一份**声明**而不是性能开关。漏写会让回调捕获旧的闭包变量，也就是闭包陷阱；多写会让 effect 频繁重建。想减少依赖不是删数组项，而是改结构：用函数式更新避免依赖当前 state，把不随渲染变化的东西移出组件，或用 `useCallback` 稳定引用。
+
+更重要的判断是这个 effect **该不该存在**。effect 只用于同步外部系统——订阅、DOM 操作、网络请求；能由 props 和 state 算出来的值应该在渲染中直接计算，事件驱动的逻辑应该写在事件处理器里，用 effect 同步派生状态会多一次渲染并制造难追踪的连锁更新。需要在 props 变化时重置状态，用 `key` 重建组件更干净。
+
+最后，`StrictMode` 在开发环境会额外挂载卸载一次，这是用来暴露缺失的清理函数，不是 bug。
+
+## 深度追问
+
+1. **为什么 Hooks 不能写在条件里？** React 在 fiber 上维护一条 Hook 链表，每次渲染按调用顺序取槽位，没有任何标识符。条件调用会让某次渲染的 Hook 数量或顺序变化，后续 Hook 全部读到错位的状态。这也是自定义 Hook 必须以 `use` 开头的原因——让 lint 规则能识别并检查。
+2. **依赖漏写会怎样，怎么正确减少依赖？** effect 会继续使用定义它那次渲染的闭包变量，表现为"值永远停在某个旧值"或"清理函数清理的是旧对象"。减少依赖的正确做法是改结构：函数式更新、把常量移出组件、把函数移进 effect、用 `useCallback` 稳定引用，而不是从数组里删掉。
+3. **哪些逻辑不该放进 effect？** 派生数据的计算（应在渲染中做）、事件触发的副作用（应在事件处理器里）、props 变化时重置状态（应用 `key`）、订阅外部 store（应用 `useSyncExternalStore`）。剩下的"与外部系统同步"才是 effect 的领地。
+
+## 关联专题
+
+- [React 渲染与状态快照](/topics/render-state-snapshot)：每次渲染的值是不可变快照，这是闭包陷阱的根源。
+- [React 性能优化](/topics/react-performance)：`useMemo`/`useCallback` 什么时候真的有用。
+- [作用域链与闭包](/topics/closures-scope)：effect 回调捕获变量的机制。
+
+## 资料来源
+
+- [React — Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects)
+- [React — You Might Not Need an Effect](https://react.dev/learn/you-might-not-need-an-effect)

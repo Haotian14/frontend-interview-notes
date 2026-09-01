@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { topics } from '../../content/registry';
+import { loadAllPractices, topics } from '../../content/registry';
 import InterviewDeck from './InterviewDeck';
 import {
   deriveQuestions,
@@ -13,8 +13,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// practice.ts 是惰性模块，测试里一次性载入后同步使用。
+const practices = await loadAllPractices();
+const allQuestions = deriveQuestions(topics, practices);
+
 describe('interview question bank', () => {
-  const questions = deriveQuestions(topics);
+  const questions = allQuestions;
 
   test('filters by chapter and level', () => {
     const filtered = filterQuestions(questions, {
@@ -38,7 +42,7 @@ describe('interview question bank', () => {
 });
 
 describe('InterviewDeck', () => {
-  const questions = deriveQuestions(topics).slice(0, 3);
+  const questions = allQuestions.slice(0, 3);
 
   test('counts down and reveals the answer', () => {
     vi.useFakeTimers();
@@ -85,7 +89,7 @@ describe('InterviewDeck', () => {
   test('offers accessible chapter and level filters', () => {
     render(
       <MemoryRouter>
-        <InterviewDeck questions={deriveQuestions(topics)} />
+        <InterviewDeck questions={allQuestions} />
       </MemoryRouter>,
     );
 

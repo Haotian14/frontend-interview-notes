@@ -11,9 +11,12 @@ import TopicToc from './TopicToc';
 
 export default function TopicLayout({
   topic,
+  conclusion,
   children,
 }: {
   topic: TopicMeta;
+  /** 一句话结论来自按需加载的 practice.ts，由 TopicPage 取好后传入。 */
+  conclusion: string;
   children: ReactNode;
 }) {
   const articleRef = useRef<HTMLElement>(null);
@@ -52,7 +55,7 @@ export default function TopicLayout({
           </header>
 
           <ContentCallout title="一句话结论" variant="conclusion">
-            <p>{topic.interview.answer}</p>
+            <p>{conclusion}</p>
           </ContentCallout>
 
           <article ref={articleRef} className="topic-content">

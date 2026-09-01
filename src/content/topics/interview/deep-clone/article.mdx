@@ -1,0 +1,188 @@
+# 深拷贝的实现与边界
+
+## 一句话结论
+
+先问"数据里有什么"再选方案：纯 JSON 用 JSON 往返，含内置类型或循环引用用 `structuredClone`，含函数、类实例或需要保留原型才手写；而在多数状态管理场景里，正确答案是**不要深拷贝**。
+
+## 前置知识
+
+请先阅读[类型转换与相等比较](/topics/type-coercion)，理解 `JSON.stringify` 对特殊值的处理规则。再看[原型链与继承](/topics/prototype-inheritance)：拷贝是否保留原型，是手写实现和原生方案的关键分水岭。
+
+## 核心机制
+
+### 浅拷贝只复制一层
+
+```js
+const original = { name: 'Ada', tags: ['a', 'b'], meta: { active: true } };
+const shallow = { ...original };
+
+shallow.name = 'Bob';          // 互不影响
+shallow.tags.push('c');        // original.tags 也变成了三项
+```
+
+展开运算符、`Object.assign`、`Array.prototype.slice`、`Array.from` 全都是浅拷贝：第一层是新的，嵌套的对象仍然是同一个引用。
+
+### JSON 往返及其损失
+
+```js
+const copy = JSON.parse(JSON.stringify(original));
+```
+
+写起来最短，但损失清单很长：
+
+| 原值 | 往返后 |
+| --- | --- |
+| `Date` | ISO 字符串 |
+| `Map` / `Set` | `{}` |
+| `RegExp` | `{}` |
+| `undefined`（对象属性） | 属性消失 |
+| `undefined`（数组元素） | `null` |
+| 函数、`Symbol` | 消失 / 变 `null` |
+| `NaN`、`Infinity` | `null` |
+| `BigInt` | 抛 `TypeError` |
+| 循环引用 | 抛 `TypeError` |
+| 原型链 | 丢失，全部变成普通对象 |
+
+此外 `toJSON` 方法会改变序列化结果（`Date` 正是靠它变成字符串），不可枚举属性和 `Symbol` 键会被忽略。它只适用于**确定是纯 JSON 数据**的场景，例如从接口拿到的响应体。
+
+### structuredClone：现在的默认选择
+
+```js
+const clone = structuredClone(original);
+```
+
+基于 HTML 规范的结构化克隆算法，浏览器和 Node 都已原生支持。它：
+
+- **正确处理循环引用**。
+- 支持 `Date`、`Map`、`Set`、`RegExp`、`ArrayBuffer`、`TypedArray`、`Blob`、`File`、`Error` 等大量内置类型。
+- 可以配合 `transfer` 选项转移 `ArrayBuffer` 的所有权（零拷贝传给 Worker）。
+
+限制也很明确：
+
+- **不能克隆函数**、`Symbol`、DOM 节点、`WeakMap`/`WeakSet`，遇到会抛 `DataCloneError`。
+- **不保留原型链**：克隆一个类实例会得到一个普通对象，方法全部丢失。
+- 不复制属性描述符（getter/setter 会被求值成普通属性），不复制不可枚举属性。
+
+绝大多数"深拷贝一份数据"的需求，`structuredClone` 就是正确答案。
+
+### 手写实现
+
+需要保留原型、处理函数、或者需要自定义规则时才手写。核心是三件事：
+
+```js
+function deepClone(value, seen = new WeakMap()) {
+  // 1. 原始值与函数直接返回（函数通常按引用共享）
+  if (value === null || typeof value !== 'object') return value;
+
+  // 2. 循环引用：已经拷过就返回同一个副本
+  if (seen.has(value)) return seen.get(value);
+
+  // 3. 按内置类型分别处理
+  if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof RegExp) return new RegExp(value.source, value.flags);
+
+  if (value instanceof Map) {
+    const result = new Map();
+    seen.set(value, result);
+    for (const [k, v] of value) result.set(deepClone(k, seen), deepClone(v, seen));
+    return result;
+  }
+
+  if (value instanceof Set) {
+    const result = new Set();
+    seen.set(value, result);
+    for (const item of value) result.add(deepClone(item, seen));
+    return result;
+  }
+
+  // 4. 保留原型，让类实例克隆后仍有方法
+  const result = Array.isArray(value)
+    ? []
+    : Object.create(Object.getPrototypeOf(value));
+
+  seen.set(value, result);   // 必须在递归之前登记，否则自引用会无限递归
+
+  for (const key of Reflect.ownKeys(value)) {   // 包含 Symbol 键
+    result[key] = deepClone(value[key], seen);
+  }
+
+  return result;
+}
+```
+
+四个容易写错的点：
+
+1. **`seen.set` 必须在递归之前**。先登记再递归，自引用才能命中缓存；顺序反了会栈溢出。
+2. 用 `WeakMap` 而不是 `Map`：键是弱引用，拷贝结束后不阻碍垃圾回收。
+3. 用 `Reflect.ownKeys` 才能覆盖 `Symbol` 键；`Object.keys` 会漏掉它们和不可枚举属性。
+4. **递归深度**：几万层嵌套（例如链表结构）会爆栈，需要改成用显式栈的迭代写法。
+
+### 多数时候不需要深拷贝
+
+React 的状态更新只要求"被修改的路径上产生新引用"，未修改的子树可以**结构共享**：
+
+```js
+// 只沿修改路径创建新对象，其余部分复用引用
+setState(prev => ({
+  ...prev,
+  user: { ...prev.user, name: '新名字' },
+}));
+```
+
+这既满足了不可变性的要求（引用变了，`memo` 和依赖比较能感知），又避免了整棵树的复制。层级深时用 Immer 把它自动化：
+
+```js
+setState(produce(draft => { draft.user.profile.name = '新名字'; }));
+```
+
+全量深拷贝在这里是纯粹的浪费——它复制了 99% 没有变化的数据，制造内存与 GC 压力。相关背景见[React 渲染与状态快照](/topics/render-state-snapshot)。
+
+## 项目应用
+
+1. 默认用 `structuredClone`；确认数据是纯 JSON 且量不大时才用 JSON 往返（它在小对象上反而更快）。
+2. 需要克隆类实例并保留方法时，优先给类加一个 `clone()` 方法，比通用深拷贝更清晰也更快。
+3. 状态更新用结构共享或 Immer，不要 `cloneDeep` 整个 store。
+4. 跨线程传数据时用 `postMessage`（它本身就走结构化克隆），大块二进制用 `transfer` 转移所有权，避免复制。
+5. 需要"快照对比"时考虑不可变数据结构或版本号，而不是每次都深拷贝再比较。
+6. 引入 `lodash.cloneDeep` 前先确认原生方案不够用——它的体积和递归成本都不小。
+
+## 边界与反例
+
+"深拷贝就是完全独立的副本"并不总成立。函数、DOM 节点、`WeakMap`、类的私有字段、闭包捕获的状态，要么无法复制，要么复制后语义不同。
+
+"`JSON.parse(JSON.stringify())` 简单可靠"只在纯数据上成立。它在含 `Date` 的表单数据、含 `undefined` 的可选字段、含 `Map` 的缓存结构上都会静默出错——**静默**是最危险的部分。
+
+"深拷贝可以避免所有共享问题"忽略了性能：对一个几 MB 的对象做深拷贝可能耗时几十毫秒，放在渲染路径上会直接造成掉帧。
+
+`structuredClone` 不是同步安全的万能钥匙：它对超大对象同样耗时，且不保留原型这一点经常在克隆类实例时才被发现。
+
+最后，判断两个对象是否"相等"和拷贝是两个问题。深比较同样昂贵；在需要频繁比较的场景，用不可变数据 + 引用比较（`prev === next`）远比每次深比较划算。
+
+## 面试回答
+
+先问清楚数据里有什么，再选方案。
+
+如果是纯 JSON 数据，JSON 往返最简单，但它会把 `Date` 变成字符串、`Map` 和 `Set` 变成空对象、值为 `undefined` 的属性直接丢掉、`NaN` 和 `Infinity` 变成 `null`，遇到循环引用还会抛错——而且大多是**静默**出错。
+
+现在浏览器和 Node 都提供了原生的 `structuredClone`，它基于结构化克隆算法，支持循环引用以及 `Date`、`Map`、`Set`、`RegExp`、`ArrayBuffer` 等大量内置类型，是我的默认首选。限制是不能克隆函数、DOM 节点和 `Symbol`，也不保留原型链——克隆类实例会得到普通对象。
+
+需要覆盖这些情况才手写递归，核心是三点：用 `WeakMap` 记录已拷贝的对象处理循环引用（而且必须在递归之前登记）、按类型分别处理内置对象、用 `Object.create` 配合 `getPrototypeOf` 保留原型。还要注意递归太深会爆栈，层级不确定时改成显式栈的迭代写法。
+
+最后我想强调，很多时候根本不需要深拷贝：React 里更新状态只需要沿修改路径创建新对象，其余部分结构共享，Immer 就是把这件事自动化。全量深拷贝反而会造成不必要的内存和 GC 压力。
+
+## 深度追问
+
+1. **JSON 往返会丢什么？** `Date` 变字符串、`Map`/`Set`/`RegExp` 变空对象、`undefined` 属性消失（数组元素变 `null`）、函数与 `Symbol` 消失、`NaN`/`Infinity` 变 `null`、`BigInt` 直接抛错、循环引用抛错、原型链丢失、不可枚举属性和 `Symbol` 键被忽略。而且除了后两种抛错的情况，其余都是静默的。
+2. **怎么处理循环引用？** 用一个 `WeakMap` 把"原对象 → 副本"记录下来，递归入口先查表命中就直接返回已有副本。关键在于**先登记再递归**：创建好副本容器就立刻 `set`，然后才遍历属性，否则自引用会在登记之前再次进入递归导致栈溢出。用 `WeakMap` 是为了不阻碍垃圾回收。
+3. **`structuredClone` 的限制？** 不能克隆函数、`Symbol`、DOM 节点、`WeakMap`/`WeakSet`，遇到抛 `DataCloneError`；不保留原型链，类实例会退化成普通对象、方法丢失；不复制属性描述符，getter 会被求值成普通属性；对超大对象同样有可观的耗时。
+
+## 关联专题
+
+- [类型转换与相等比较](/topics/type-coercion)：`JSON.stringify` 对特殊值的处理规则。
+- [原型链与继承](/topics/prototype-inheritance)：拷贝是否保留原型的差别。
+- [React 渲染与状态快照](/topics/render-state-snapshot)：结构共享为什么优于深拷贝。
+
+## 资料来源
+
+- [MDN — structuredClone()](https://developer.mozilla.org/en-US/docs/Web/API/Window/structuredClone)
+- [HTML Standard — Structured cloning](https://html.spec.whatwg.org/multipage/structured-data.html#safe-passing-of-structured-data)

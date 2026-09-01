@@ -1,0 +1,141 @@
+# 状态归属与 Context 边界
+
+## 一句话结论
+
+先按**来源和生命周期**给状态分类——服务端缓存、URL 状态、客户端共享状态、局部状态——再决定存放位置；Context 是依赖注入机制，不是状态管理方案。
+
+## 前置知识
+
+请先阅读[React 性能优化](/topics/react-performance)，理解重渲染的传播方式。状态放错位置最直接的后果就是大范围无意义渲染，而这类问题靠 `memo` 是补不回来的。
+
+## 核心机制
+
+### 四类状态
+
+**1. 服务端数据**：用户列表、订单详情、配置。它的本质是**远端数据在本地的缓存**，真正的问题是何时失效、如何去重、并发请求怎么处理、失败怎么重试。这些都不是 `useState` 或 Redux 擅长的事。
+
+```jsx
+// 手写：需要自己处理 loading、error、竞态、缓存、失效、重取
+const [user, setUser] = useState(null);
+useEffect(() => { /* 一大段 */ }, [id]);
+
+// 交给数据层：以上全部内建
+const { data: user, isPending, error } = useQuery({
+  queryKey: ['user', id],
+  queryFn: ({ signal }) => fetchUser(id, { signal }),
+});
+```
+
+把服务端数据复制进全局 store 会立刻产生两个真相源，之后所有"数据不同步"的 bug 都从这里来。
+
+**2. URL 状态**：搜索关键词、筛选条件、分页、排序、当前标签页、详情弹窗的 id。判断标准是"刷新页面或把链接发给同事，还应该看到一样的界面吗"——如果是，它就属于 URL。
+
+```jsx
+const [params, setParams] = useSearchParams();
+const page = Number(params.get('page') ?? 1);
+```
+
+URL 天然提供持久化、可分享、可回退三种能力，是最被浪费的状态容器。
+
+**3. 客户端共享状态**：登录信息、主题、语言、购物车草稿、多步表单的中间数据。这才是 Context 或状态库的领地。
+
+**4. 局部状态**：输入框内容、下拉是否展开、悬停状态。默认 `useState`，只有当兄弟组件需要协作时才**提升到最近公共父组件**——注意是最近，不是根组件。
+
+不影响渲染的值（定时器 id、上一次的值、DOM 引用）用 `useRef`。
+
+### Context 的真实职责
+
+Context 解决的是"跨越很多层传递数据"的问题，也就是依赖注入。它**不提供**任何更新优化：
+
+```jsx
+// 反例：一个大 Context 装所有东西
+const AppContext = createContext(null);
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [theme, setTheme] = useState('light');
+  // 每次渲染都是新对象 → 所有消费者重渲染
+  return <AppContext.Provider value={{ user, setUser, theme, setTheme }}>…</AppContext.Provider>;
+}
+```
+
+两个问题叠加：
+
+1. `value` 每次渲染都是新对象，引用比较必然不等。
+2. 即使用 `useMemo` 稳定了，**只要 `user` 变化，只消费 `theme` 的组件也会重渲染**——Context 的订阅粒度是整个 value。
+
+解法按代价排序：
+
+```jsx
+// a. 按变化频率拆分 Context
+<UserContext.Provider value={userValue}>
+  <ThemeContext.Provider value={themeValue}>{children}</ThemeContext.Provider>
+</UserContext.Provider>
+
+// b. 状态与更新函数分开：dispatch 恒定，读值的组件才需要重渲染
+<StateContext.Provider value={state}>
+  <DispatchContext.Provider value={dispatch}>{children}</DispatchContext.Provider>
+</StateContext.Provider>
+
+// c. 需要细粒度订阅时，用外部 store + 选择器
+const count = useStore(state => state.count);   // Zustand / Redux / useSyncExternalStore
+```
+
+订阅外部数据源的标准 API 是 `useSyncExternalStore`，它保证并发渲染下的一致性（撕裂问题）；自己写订阅逻辑很难做对。
+
+### 状态结构的几条原则
+
+- **避免冗余**：能从现有 state 算出来的就不要存。存了 `items` 就不要再存 `itemCount`，两者会不同步。
+- **避免重复**：同一份数据不要既存在列表里又存在"选中项"里，存 `selectedId` 而不是 `selectedItem`。
+- **扁平化**：深层嵌套的 state 更新起来痛苦且容易漏；用 id 索引的对象（`Record<Id, Item>`）加一个顺序数组。
+- **状态机而非布尔标志**：`isLoading` + `isError` + `isSuccess` 三个布尔量能表示八种组合，其中五种是非法的。用 `status: 'idle' | 'loading' | 'success' | 'error'` 更安全，也便于[类型收窄与穷尽检查](/topics/type-narrowing)。
+
+## 项目应用
+
+1. 新增状态时先问三个问题：它来自服务端吗（→ 数据层）？刷新后还该在吗（→ URL 或存储）？只有一个组件用吗（→ 局部）？
+2. 服务端数据统一走数据请求库，全局 store 只放真正的客户端状态。多数应用最后会发现全局 store 里剩不下几个字段。
+3. Context 按变化频率拆分，`value` 一律 `useMemo`，把 `dispatch` 与 `state` 分成两个 Context。
+4. 需要"选一部分订阅"时不要硬用 Context，换成 Zustand、Jotai 或 Redux Toolkit 这类支持选择器的方案。
+5. 表单状态用专门的表单库（React Hook Form 等）管理，它们用非受控 + 订阅的方式避免了每次按键全表单重渲染。
+6. 用 `key` 而不是 effect 来"在某个 id 变化时重置整块状态"，见[协调算法与 key](/topics/reconciliation-keys)。
+
+## 边界与反例
+
+"用 Context 就不用状态管理库了"是把两件事混为一谈。Context 负责**传递**，库负责**存储与订阅优化**。小应用用 Context + `useReducer` 足够，但一旦需要选择器、中间件、时间旅行或跨页面持久化，就该用库。
+
+"全局状态越少越好"也不绝对。真正的问题是**同一份数据有几个真相源**，而不是它放在哪一层。
+
+"把所有东西放进 Redux 便于调试"的代价是大量样板和手写缓存逻辑；现代做法是 Redux Toolkit + RTK Query，或者干脆用 TanStack Query 管数据、用轻量库管 UI 状态。
+
+Context 的默认值只在**没有 Provider**时使用，不是"初始值"；忘记包 Provider 时组件会静默拿到默认值，建议默认值设为 `null` 并在自定义 Hook 里抛错。
+
+最后，状态提升不是越高越好。提到根组件会让整棵树重渲染，也让组件失去独立复用的能力；**提到最近的公共父组件**就够了。
+
+## 面试回答
+
+我不会先问用哪个状态管理库，而是先把状态按来源分类。
+
+第一类是**服务端数据**，它本质上是远端数据的缓存，需要的是请求去重、失效、重取和竞态处理，应该交给 TanStack Query 这类数据层。把它塞进全局 store 手动同步，是大多数状态混乱的根源——同一份数据有了两个真相源。
+
+第二类是**可分享可刷新的界面状态**，比如筛选条件、分页、当前标签页，应该放进 URL 查询参数，这样刷新、分享、前进后退都自然成立。
+
+第三类是真正的**客户端共享状态**，比如登录信息、主题、购物车草稿，这才需要 Context 或状态库。第四类是**局部状态**，默认 `useState`，只有兄弟组件需要协作时才提升到**最近**的公共父组件。
+
+关于 Context 有两点要说清楚：它是依赖注入而不是状态管理，本身不提供更新优化；消费者订阅的是整个 `value`，任何变化都会让所有消费者重渲染。所以要按变化频率拆分 Context、用 `useMemo` 稳定 `value`、把 `state` 和 `dispatch` 分开。需要细粒度订阅时，用带选择器的外部 store 配合 `useSyncExternalStore` 更合适。
+
+## 深度追问
+
+1. **为什么服务端数据不该放进全局 store？** 因为它是缓存而不是状态：它有新鲜度、需要失效与重取、会有并发请求和竞态。手动放进 store 意味着自己实现这一整套机制，并且立刻产生第二个真相源，导致"列表更新了详情没更新"这类 bug。
+2. **Context 的性能问题与解法？** 问题有两层：`value` 每次渲染都是新对象；即使稳定了，订阅粒度也是整个 value，无法只订阅一部分。解法依次是 `useMemo` 稳定 value、按变化频率拆分多个 Context、把 state 与 dispatch 分离、以及改用支持选择器的外部 store。
+3. **什么状态适合放 URL？** 判断标准是"刷新或把链接发给别人时，还应该看到同样的界面吗"。搜索词、筛选、分页、排序、当前标签、详情弹窗的 id 都属于这一类。放进 URL 免费获得持久化、可分享和浏览器前进后退支持。
+
+## 关联专题
+
+- [React 性能优化](/topics/react-performance)：Context 是最容易造成全树重渲染的地方。
+- [Hooks 规则与依赖数组](/topics/hooks-dependencies)：派生状态应当在渲染中计算而不是用 effect 同步。
+- [协调算法与 key](/topics/reconciliation-keys)：用 key 重置整块状态。
+
+## 资料来源
+
+- [React — Choosing the State Structure](https://react.dev/learn/choosing-the-state-structure)
+- [React — Passing Data Deeply with Context](https://react.dev/learn/passing-data-deeply-with-context)

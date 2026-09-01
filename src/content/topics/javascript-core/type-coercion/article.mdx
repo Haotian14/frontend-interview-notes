@@ -1,0 +1,142 @@
+# 类型转换与相等比较
+
+## 一句话结论
+
+隐式转换不是玄学：每个运算符都明确规定了自己调用哪个抽象操作（`ToPrimitive`、`ToNumber`、`ToString`、`ToBoolean`），记住这些操作比背结论有用得多。
+
+## 前置知识
+
+请先阅读[原型链与继承](/topics/prototype-inheritance)，理解 `valueOf` 和 `toString` 是从原型上来的方法——这正是对象转原始值时被调用的入口。本文默认读者知道 JavaScript 有七种原始类型加对象类型。
+
+## 核心机制
+
+### 四个抽象操作
+
+- **ToPrimitive(obj, hint)**：把对象转成原始值。按 hint 决定顺序：hint 为 `number`（默认）时先 `valueOf` 后 `toString`，为 `string` 时相反。若对象定义了 `Symbol.toPrimitive`，它优先于一切。
+- **ToNumber(x)**：`""` → `0`，`"12"` → `12`，`"12px"` → `NaN`，`true` → `1`，`null` → `0`，`undefined` → `NaN`。
+- **ToString(x)**：`null` → `"null"`，数组用逗号连接元素（`[1,[2,3]]` → `"1,2,3"`），普通对象 → `"[object Object]"`。
+- **ToBoolean(x)**：只有八个假值，其余全真。
+
+### 运算符调用了什么
+
+```js
+1 + '2'        // '12'：加号里有一侧是字符串 → 拼接
+'3' - 1        // 2  ：减号只做 ToNumber
+[] + []        // '' ：两个数组各自 ToString 得空串
+[] + {}        // '[object Object]'
+[1, 2] == '1,2' // true：数组 ToPrimitive 得 '1,2'
+'b' > 'a'      // true：两边都是字符串 → 按 UTF-16 码元逐位比较
+'10' > '9'     // false：仍是字符串比较，'1' < '9'
+```
+
+关键区分：
+
+- **加号**是唯一的重载运算符。两边先 `ToPrimitive`（默认 hint），只要**任一侧结果是字符串**就做字符串拼接，否则都 `ToNumber` 后相加。
+- `-`、`*`、`/`、`%`、`**` 只有数值语义，直接走 `ToNumber`（BigInt 除外，混用会抛错）。
+- `<`、`>`、`<=`、`>=` 在两侧都是字符串时按字符串比较，否则走数值转换。这解释了 `null >= 0` 为 `true`（`null` → `0`）而 `null > 0` 为 `false`、`null == 0` 也为 `false`——因为 `==` 有一条专门规则把 `null` 排除在数值比较之外。
+
+`{} + []` 在控制台可能得到 `0`，那是因为开头的 `{}` 被解析成**空块语句**，剩下 `+[]` 是一元加号；写成 `({} + [])` 就回到 `'[object Object]'`。这属于语法解析问题，不是转换规则问题。
+
+### == 的完整规则
+
+抽象相等的步骤是有限的：
+
+1. 类型相同 → 按 `===` 比较。
+2. `null == undefined` 为真，且它们**不等于其它任何值**（包括 `0`、`''`、`false`）。
+3. 数字与字符串 → 字符串 `ToNumber`。
+4. 任一侧是布尔 → 布尔先 `ToNumber`（所以 `'1' == true` 为真，`'abc' == true` 为假）。
+5. 对象与原始值 → 对象先 `ToPrimitive`，再回到上面的规则。
+6. 其余为假。
+
+因为规则 2 的存在，`x == null` 是**唯一值得保留的 `==` 用法**：它恰好等价于"`x` 是 `null` 或 `undefined`"，比 `x === null || x === undefined` 简洁且没有歧义。除此之外一律用 `===`。
+
+### ===、Object.is 与 NaN
+
+`===` 只有两处"反直觉"，`Object.is` 正好修正它们：
+
+```js
+NaN === NaN;            // false
+Object.is(NaN, NaN);    // true
+
+0 === -0;               // true
+Object.is(0, -0);       // false
+```
+
+`NaN !== NaN` 是浮点标准的规定，因此判断 NaN 只能用 `Number.isNaN(x)`——全局 `isNaN` 会先做 `ToNumber`，`isNaN('abc')` 也是 `true`，几乎总是错的选择。`-0` 在除法（`1 / -0` 为 `-Infinity`）和 `Object.is` 之外与 `0` 无异，常见于坐标计算和排序比较器的返回值。
+
+数组的 `includes` 用 SameValueZero 语义：它认为 `NaN` 等于 `NaN`，但 `+0` 等于 `-0`，所以 `[NaN].includes(NaN)` 为真而 `[NaN].indexOf(NaN)` 为 `-1`。
+
+### 类型判断的正确姿势
+
+```js
+typeof 'a';               // 'string'
+typeof undefined;         // 'undefined'
+typeof null;              // 'object' ← 历史遗留，无法修复
+typeof (() => {});        // 'function'
+typeof Symbol();          // 'symbol'
+typeof 10n;               // 'bigint'
+
+Array.isArray([]);                              // 数组
+Object.prototype.toString.call(new Date());     // '[object Date]'
+value instanceof Map;                           // 同 realm 内有效
+```
+
+`typeof` 适合原始值和函数；数组用 `Array.isArray`（跨 realm 也有效）；内置对象用 `Object.prototype.toString.call` 兜底；自定义类用 `instanceof`，但要接受跨 realm 失效的风险。
+
+### 存在性判断与短路运算符
+
+```js
+const port = config.port ?? 3000;   // 只有 null / undefined 才回退
+const port2 = config.port || 3000;  // 0 也会被回退掉 ← 常见 bug
+
+const city = user?.address?.city;   // 任一环为 null/undefined 时短路为 undefined
+user.profile ??= {};                // 逻辑赋值：仅在为空值时赋值
+```
+
+`||` 用假值判断，`??` 用空值判断。凡是 `0`、`''`、`false` 是**合法业务值**的地方（数量、金额、开关、搜索词），必须用 `??`。可选链 `?.` 同理只在 `null`/`undefined` 时短路，它不会掩盖 `TypeError: x.y is not a function` 之外的错误，也不该被用来掩盖"这个字段本不该缺失"的数据问题。
+
+## 项目应用
+
+1. 团队规范里禁用 `==`，只保留 `x == null` 这一个例外，并在 ESLint 中用 `eqeqeq: ['error', 'always', { null: 'ignore' }]` 表达。
+2. 外部数据（URL 参数、表单、`localStorage`、接口）永远是字符串或 `unknown`，在边界处**显式转换**并校验：`Number(x)` 配合 `Number.isFinite`，而不是依赖 `+x` 或隐式转换。
+3. 判断"空"要分清三件事：不存在（`== null`）、空字符串（`=== ''`）、空集合（`arr.length === 0` / `Object.keys(o).length === 0`）。空数组和空对象都是真值。
+4. 排序比较器返回数值差时注意 `-0`；金额计算不要用浮点数直接相加，用最小单位整数或 decimal 库。
+5. 表单默认值、配置合并一律用 `??` 和 `??=`，把 `||` 留给真正的"真假"语义。
+6. TypeScript 能在编译期挡住大部分转换问题，但 `any`、类型断言和外部数据仍会漏进来，运行时校验不可省，参见[类型收窄与穷尽检查](/topics/type-narrowing)。
+
+## 边界与反例
+
+"JavaScript 的隐式转换毫无规律"不成立——规律清晰且写在规范里，只是运算符各自不同。但"掌握了规则就可以放心用隐式转换"也不对：**可读性**才是禁用它的主要理由，读代码的人不该在心里跑一遍抽象操作。
+
+`String(x)` 和 `x.toString()` 不等价：后者在 `null`/`undefined` 上抛错。模板字符串走 `ToString`，因此 `${undefined}` 得到 `"undefined"` 而不是空串。
+
+`JSON.stringify` 会丢掉 `undefined`、函数和 `Symbol`（对象属性直接消失，数组元素变成 `null`），`NaN` 和 `Infinity` 变成 `null`，`Date` 变成字符串。用它做深拷贝的问题见[深拷贝的实现与边界](/topics/deep-clone)。
+
+`parseInt('08')` 在现代引擎里是 `8`，但 `parseInt` 会忽略尾部非法字符（`parseInt('12px')` 为 `12`），而 `Number('12px')` 是 `NaN`。要"严格数字"用 `Number`，要"从前缀解析"才用 `parseInt`，且始终显式传基数。
+
+最后，`==` 的对象比较永远是**引用相等**，两个内容相同的对象不相等；值相等需要自己实现或用不可变数据结构。
+
+## 面试回答
+
+隐式转换不是随机的，每个运算符都规定了自己调用哪个抽象操作。加号两边先 `ToPrimitive`，只要有一边得到字符串就变成拼接，否则都转数字；减法乘法这类只走 `ToNumber`；关系运算符两边都是字符串时按码元比较，否则走数值转换。`ToPrimitive` 对对象依次尝试 `Symbol.toPrimitive`、`valueOf`、`toString`，数组的 `toString` 是逗号连接，这就解释了 `[] + []` 得到空字符串。
+
+`==` 的规则是有限的几条：同类型直接比较；`null` 和 `undefined` 只互等；数字与字符串比较时字符串转数字；布尔先转数字；对象与原始值比较时对象先 `ToPrimitive`。所以除了 `x == null` 这个刻意同时判断两种空值的写法，我一律用 `===`。`===` 和 `Object.is` 的差别只有 `NaN` 和正负零两处。
+
+工程上我的规则是：判断存在用 `== null` 或可选链加空值合并；判断类型用 `typeof` 处理原始值、`Array.isArray` 处理数组、`Object.prototype.toString` 兜底；判断 NaN 用 `Number.isNaN`；绝不用真假值判断空数组或空对象，因为它们都是真值。
+
+## 深度追问
+
+1. **`[] + {}` 和 `{} + []` 为什么可能不同？** 前者是表达式，两个操作数各自 `ToPrimitive` 后拼接得 `'[object Object]'`；后者在语句位置时开头的 `{}` 被解析成空块，剩下 `+[]` 是一元加号得 `0`。差别来自**语法解析**，不是转换规则，加括号即可消除。
+2. **`===` 和 `Object.is` 的差别？** 只有两处：`Object.is(NaN, NaN)` 为真而 `NaN === NaN` 为假；`Object.is(0, -0)` 为假而 `0 === -0` 为真。数组的 `includes` 用的是介于两者之间的 SameValueZero。
+3. **`??` 和 `||` 什么时候必须区分？** 当 `0`、空字符串、`false` 是合法业务值时。例如数量为 0、搜索词为空、开关为 false，用 `||` 会把它们错误地替换成默认值，必须用 `??`。
+
+## 关联专题
+
+- [原型链与继承](/topics/prototype-inheritance)：`valueOf`/`toString` 来自原型，也是类型判断可靠性的来源。
+- [类型收窄与穷尽检查](/topics/type-narrowing)：编译期如何把这些运行时陷阱提前暴露。
+- [深拷贝的实现与边界](/topics/deep-clone)：`JSON` 往返丢失的正是本文列出的那些特殊值。
+
+## 资料来源
+
+- [MDN — Equality comparisons and sameness](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Equality_comparisons_and_sameness)
+- [ECMAScript — Type Conversion](https://tc39.es/ecma262/#sec-type-conversion)

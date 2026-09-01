@@ -1,0 +1,141 @@
+# 模块系统与 ESM
+
+## 一句话结论
+
+ESM 在解析阶段就确定依赖图并建立实时只读绑定，CommonJS 在运行到 `require` 时才加载并拷贝导出值；这一个差别衍生出循环依赖表现、顶层 `await`、以及能否 Tree Shaking 的全部后果。
+
+## 前置知识
+
+请先阅读[作用域链与闭包](/topics/closures-scope)。模块本质上是一个拥有独立顶层作用域的执行单元，理解作用域与绑定的区别，才能理解"实时绑定"到底实时在哪里。
+
+## 核心机制
+
+### 三个阶段
+
+ESM 的加载分成三步，这是它一切特性的来源：
+
+1. **构造（解析）**：下载并解析每个模块，读出 `import`/`export` 语句，递归构建模块图。此时还没有执行任何代码。
+2. **实例化**：为每个导出创建绑定槽位，把导入方的标识符**指向同一个槽位**（不是拷贝值），此时槽位处于未初始化状态。
+3. **求值**：按后序执行模块体，填充槽位。每个模块只执行一次，结果被缓存。
+
+CommonJS 没有前两步：`require(path)` 是一次同步的"读文件 → 包成函数 → 执行 → 返回 `module.exports`"，路径可以是任意运行时表达式。
+
+### 实时绑定 vs 值拷贝
+
+```js
+// counter.mjs
+export let count = 0;
+export function increment() { count += 1; }
+
+// main.mjs
+import { count, increment } from './counter.mjs';
+console.log(count);   // 0
+increment();
+console.log(count);   // 1 ← 绑定是实时的
+count = 5;            // TypeError: Assignment to constant variable（导入是只读的）
+```
+
+```js
+// counter.cjs
+let count = 0;
+module.exports = { count, increment() { count += 1; } };
+
+// main.cjs
+const { count, increment } = require('./counter.cjs');
+increment();
+console.log(count);   // 仍然是 0 ← 解构时就拷走了值
+```
+
+CommonJS 导出对象的**属性**如果被整体持有（`const m = require(...)` 后访问 `m.count`）能看到重新赋值给属性的情况，但解构或直接赋值 `module.exports = ...` 都会切断关系。这也是很多"改了配置不生效"问题的根源。
+
+### 循环依赖
+
+```js
+// a.mjs
+import { b } from './b.mjs';
+export const a = 'A';
+console.log('a sees', b);
+
+// b.mjs
+import { a } from './a.mjs';
+export const b = 'B';
+console.log('b sees', a);   // ReferenceError: Cannot access 'a' before initialization
+```
+
+ESM 会明确抛出 TDZ 错误，位置精确；CommonJS 则返回一个"当时已经赋值到 `module.exports` 上的部分"，得到一个半成品对象，往往在很远的地方才表现为 `undefined is not a function`。**ESM 报错更早也更好修**。
+
+真正的解法都是结构性的：把共享的类型和常量抽到第三个模块，或者把互相引用改成依赖注入、延迟到函数体内再取值。
+
+### 静态可分析与 Tree Shaking
+
+因为 `import`/`export` 只能出现在模块顶层、且名字是字面量，打包器可以在不执行代码的前提下知道"谁用了什么"：
+
+```js
+import { formatDate } from './utils.js';   // 可分析：只用了 formatDate
+const mod = require(`./locales/${lang}`);  // 不可分析：路径运行时才知道
+```
+
+这就是只有 ESM 能可靠 Tree Shaking 的原因。但静态可分析只是**必要条件**，还需要模块没有副作用：打包器无法确定 `import './polyfill.js'` 或模块顶层的 `window.x = 1` 是否能删，所以库要在 `package.json` 里声明 `"sideEffects": false`（或列出确有副作用的文件）。细节见[打包、Tree Shaking 与产物](/topics/bundling-tree-shaking)。
+
+### 动态 import
+
+```js
+// 返回 Promise，可用在任意位置，路径可以是变量
+const { renderChart } = await import(`./charts/${type}.js`);
+```
+
+`import()` 是**表达式**而不是语句，因此可以按需加载。它与 `require` 的区别是：异步、返回 Promise、在打包器里会成为一个独立 chunk 的分割点、并且仍然遵循 ESM 的单例缓存语义。它是代码分割的语法基础。
+
+### 环境与互操作
+
+- ESM 模块顶层 `this` 是 `undefined`；CommonJS 里是 `module.exports`。
+- ESM 里没有 `__dirname`/`__filename`，用 `import.meta.url` 配合 `new URL(...)` 取代。
+- Node 通过 `package.json` 的 `"type": "module"` 和 `.mjs`/`.cjs` 扩展名区分；`exports` 字段声明子路径入口与条件导出（`import`/`require`/`browser`）。
+- ESM 可以 `import` CommonJS（默认导出是整个 `module.exports`，具名导入靠静态分析猜测），但 CommonJS 不能同步 `require` ESM，只能用动态 `import()`。
+- **双包危险**：同一个库同时以 ESM 和 CJS 被加载时，会产生两份互不相通的模块状态；有单例语义（缓存、注册表、React 上下文）的库必须避免。
+
+## 项目应用
+
+1. 新代码一律写 ESM。构建工具、测试运行器、Node 版本都已经原生支持，混用只会让互操作问题堆积。
+2. 库的 `package.json` 写清楚 `"type"`、`"exports"`、`"sideEffects"`；不要再用 `main` + `module` 的老组合表达条件入口。
+3. 避免"桶文件"（`index.ts` 里 `export *` 转发上百个模块）：它会让编译和 Tree Shaking 都变慢，也更容易制造循环依赖。按路径直接导入更好。
+4. 用 ESLint 的 `import/no-cycle` 之类规则在 CI 里挡住循环依赖，而不是等运行时报错。
+5. 路由级、重组件、编辑器和图表库用动态 `import()` 切出去，配合预取；参见[代码分割与按需加载](/topics/code-splitting)。
+6. 需要副作用的模块（polyfill、样式、注册全局组件）单独 `import './xxx'` 并在 `sideEffects` 中显式列出，不要混在有导出的模块里。
+
+## 边界与反例
+
+"ESM 一定比 CommonJS 快"没有依据。浏览器里不打包直接用 ESM 会产生大量请求瀑布，生产环境仍需打包；ESM 的优势在**可分析性**而非运行速度。
+
+"加了 `sideEffects: false` 就能删干净"也不对：如果代码里确实有顶层副作用（修改原型、注册全局、导入 CSS），这个声明会让打包器删掉必要的代码，制造难查的线上 bug。
+
+"实时绑定 = 响应式"是误解。绑定实时并不会触发重新渲染或通知，只是读取时拿到当前值；框架的响应式是另一套机制。
+
+顶层 `await` 会阻塞整棵依赖它的子图的求值，放在被广泛引用的模块里会显著推迟启动；它适合入口模块的配置加载，不适合工具库。
+
+最后，模块作用域不是安全边界。打包后的代码在同一个 realm 里，模块私有变量只是不可直接访问，不能用来存放密钥。
+
+## 面试回答
+
+两者最根本的差别是**确定依赖的时机**。ESM 的 `import`/`export` 是语法结构，必须出现在顶层，引擎在解析阶段就能构建完整依赖图，然后按解析、实例化、求值三阶段执行；CommonJS 的 `require` 只是普通函数调用，可以写在任何位置甚至拼接路径，运行到那一行才知道加载什么。
+
+由此派生出一串差异：ESM 的导入是对原变量的实时只读绑定，重新赋值对所有导入方可见，CommonJS 拿到的是导出值的拷贝；ESM 异步加载并支持顶层 `await`，`require` 同步阻塞；循环依赖时 ESM 因为 TDZ 直接报错、位置精确，CommonJS 返回半成品对象、问题更隐蔽。
+
+工程上最重要的推论是 Tree Shaking：只有静态可分析的 ESM 才能安全判断哪些导出没被用到，所以库应该提供 ESM 产物、用 `exports` 字段声明条件入口、并正确标注 `sideEffects`，否则打包器不敢删任何东西。另外要小心双包危险——同一个库的 ESM 和 CJS 两份副本会各自持有一套状态。
+
+## 深度追问
+
+1. **为什么只有 ESM 能可靠 Tree Shaking？** 因为导入导出是静态语法，名字是字面量、位置固定在顶层，打包器不执行代码就能建立引用关系图。`require` 的路径和取值都是运行时表达式，静态分析只能保守处理，结果是什么都不敢删。
+2. **循环依赖下两者表现如何？** ESM 在实例化阶段已建立绑定槽位，被循环引用的模块若尚未求值，访问会命中暂时性死区并抛 `ReferenceError`；CommonJS 返回此刻的 `module.exports`，通常是个缺少后续属性的半成品对象，错误延后暴露。
+3. **动态 `import()` 与 `require` 的区别？** `import()` 返回 Promise、异步、遵循 ESM 语义、在打包器中天然成为代码分割点；`require` 同步阻塞、返回值直接可用、只在 CommonJS 环境可用。需要按条件或按路由加载时用前者。
+
+## 关联专题
+
+- [作用域链与闭包](/topics/closures-scope)：模块是拥有独立顶层作用域的执行单元。
+- [打包、Tree Shaking 与产物](/topics/bundling-tree-shaking)：静态可分析性如何转化成实际的体积收益。
+- [代码分割与按需加载](/topics/code-splitting)：动态 `import()` 的工程用法。
+
+## 资料来源
+
+- [MDN — JavaScript modules](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules)
+- [ECMAScript — Modules](https://tc39.es/ecma262/#sec-modules)

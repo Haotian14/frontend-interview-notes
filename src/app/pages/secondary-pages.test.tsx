@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { RouterProvider } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { chapters } from '../../content/chapters';
-import { topics } from '../../content/registry';
+import { loadAllPractices, topics } from '../../content/registry';
 import { topicPath } from '../paths';
 import { createTestRouter } from '../router';
 
@@ -36,37 +36,42 @@ describe('secondary pages', () => {
   });
 
   test('code entries show each topic的真实输入输出与中文章节名', async () => {
-    const topic = topics.find(item => item.code);
-    if (!topic) throw new Error('测试需要代码专题');
+    const withCode = (await loadAllPractices()).filter(practice => practice.code);
+    expect(withCode.length).toBeGreaterThan(0);
+
+    const topic = topics.find(item => item.slug === withCode[0].slug)!;
     const chapterTitle = chapters.find(item => item.id === topic.chapter)?.title;
     const view = renderRoute('/code');
     await screen.findByRole('heading', { level: 1, name: '代码手册' });
+    await screen.findByText(withCode[0].code!.input);
 
     // 章节显示为中文标题而不是 slug。
     expect(screen.queryByText(new RegExp(topic.chapter))).not.toBeInTheDocument();
     expect(screen.getAllByText(new RegExp(chapterTitle!)).length).toBeGreaterThan(0);
 
     // 输入输出来自各自专题，不是共用占位文案。
-    for (const item of topics.filter(entry => entry.code)) {
-      expect(screen.getByText(item.code!.input)).toBeInTheDocument();
-      expect(screen.getByText(item.code!.output)).toBeInTheDocument();
+    for (const practice of withCode) {
+      expect(screen.getByText(practice.code!.input)).toBeInTheDocument();
+      expect(screen.getByText(practice.code!.output)).toBeInTheDocument();
     }
     view.unmount();
   });
 
-  test('reference tables are derived from topic metadata', async () => {
-    const referenceTopics = topics.filter(topic => topic.reference);
-    expect(referenceTopics.length).toBeGreaterThan(0);
+  test('reference tables are derived from topic practice files', async () => {
+    const withReference = (await loadAllPractices()).filter(practice => practice.reference);
+    expect(withReference.length).toBeGreaterThan(0);
 
     const view = renderRoute('/reference');
     await screen.findByRole('heading', { name: '前端速查表' });
+    await screen.findByRole('table', { name: withReference[0].reference!.caption });
 
     const tables = screen.getAllByRole('table');
-    expect(tables).toHaveLength(referenceTopics.length);
+    expect(tables).toHaveLength(withReference.length);
 
-    for (const topic of referenceTopics) {
-      const table = screen.getByRole('table', { name: topic.reference!.caption });
-      for (const row of topic.reference!.rows) {
+    for (const practice of withReference) {
+      const topic = topics.find(item => item.slug === practice.slug)!;
+      const table = screen.getByRole('table', { name: practice.reference!.caption });
+      for (const row of practice.reference!.rows) {
         expect(within(table).getByText(row.term)).toBeInTheDocument();
       }
       // 每张表都标注来源专题并链接过去。

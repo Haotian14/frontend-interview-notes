@@ -1,0 +1,137 @@
+# 浏览器存储与 Cookie
+
+## 一句话结论
+
+按四个维度选存储：容量、生命周期、是否需要随请求自动发送、能否被脚本读到；只有 Cookie 满足后两条，也只有它能通过 `HttpOnly` 挡住脚本读取。
+
+## 前置知识
+
+请先阅读[同源策略与 CORS](/topics/cors-cross-origin)。存储的隔离边界和 CORS 的源边界并不完全一致——Cookie 的作用域是站点（scheme + registrable domain），比源更粗，这个差异是很多安全问题的来源。
+
+## 核心机制
+
+### 选型的四个维度
+
+| 方案 | 容量 | 生命周期 | 随请求发送 | 脚本可读 |
+| --- | --- | --- | --- | --- |
+| Cookie | 约 4KB | 由 `Max-Age`/`Expires` 决定 | 是（同站自动） | 除非 `HttpOnly` |
+| localStorage | 约 5MB | 永久，直到显式清除 | 否 | 是 |
+| sessionStorage | 约 5MB | 单个标签页 | 否 | 是 |
+| IndexedDB | 通常几十 MB 到 GB | 永久 | 否 | 是 |
+| Cache Storage | 同上 | 永久 | 否 | 是 |
+| 内存变量 | 无限（受内存） | 刷新即失 | 否 | 是 |
+
+第一个问题永远是"服务端需要每次都看到它吗"。需要 → Cookie；不需要 → 其它。
+
+### Cookie 的属性组合
+
+```http
+Set-Cookie: session=abc123; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=1209600
+```
+
+- **`HttpOnly`**：脚本读不到（`document.cookie` 里不出现），但请求照常携带。这是防止 XSS 窃取会话的**唯一有效手段**。
+- **`Secure`**：只在 HTTPS 上发送。生产环境必加。
+- **`SameSite`**：控制跨站请求是否携带。
+  - `Lax`（现代浏览器默认）：顶级导航的 `GET` 会带上，跨站的 `POST`、`iframe`、`img`、`fetch` 不带。
+  - `Strict`：任何跨站请求都不带。最安全，但从外站链接进来时会显示为未登录，通常配合一个"引导 Cookie"处理。
+  - `None`：跨站也带，**必须同时加 `Secure`**，否则被拒绝。用于确实需要嵌入第三方页面的场景。
+- **`Domain`**：不写只作用于当前主机；写了会包含所有子域。子域越多，泄露面越大。
+- **`Path`**：路径前缀匹配，隔离能力很弱，不要当作安全边界。
+- **`__Host-` / `__Secure-` 前缀**：带 `__Host-` 前缀的 Cookie 必须是 `Secure`、`Path=/` 且不带 `Domain`，浏览器强制校验，能防止子域覆写主域 Cookie。
+
+注意 Cookie **不区分端口**，且同一个主机的 HTTP 与 HTTPS 在很多情况下共享 Cookie（`Secure` 只限制发送方向）。所以它的隔离粒度比同源策略粗，本地开发时不同端口的应用会互相看到 Cookie。
+
+### 令牌放哪里
+
+这是最高频的追问。
+
+```js
+// ❌ 反例：任何 XSS 都能一行代码偷走
+localStorage.setItem('accessToken', token);
+```
+
+`localStorage` 里的东西对同源的所有脚本可见——包括被注入的恶意脚本和被投毒的第三方依赖。相对稳妥的组合是：
+
+1. **刷新令牌**放 `HttpOnly; Secure; SameSite=Lax`（或 `Strict`）的 Cookie，脚本完全接触不到。
+2. **访问令牌**放**内存变量**（模块级变量或状态库），短有效期，刷新页面时用刷新 Cookie 静默换取新的。
+3. 用 Cookie 承载会话时，配合 CSRF 防御（同站属性 + CSRF token），见[CSRF 与身份凭证](/topics/csrf-defense)。
+
+需要说明的是：如果站点存在 XSS，攻击者可以直接以用户身份发请求，`HttpOnly` 并不能挽救一切——它只是让凭证不被**带走**长期复用。根治仍然要靠[XSS 防御与内容安全策略](/topics/xss-defense)。
+
+### Web Storage 的实际问题
+
+```js
+// 必须容错：隐私模式、存储配额耗尽、被策略禁用都会抛异常
+function readPreference(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+```
+
+要点：
+
+- API 是**同步**的，读写大对象会阻塞主线程；序列化一个几 MB 的 JSON 足以造成明显卡顿。
+- 只能存字符串，存对象必须自己序列化，`Date`、`Map`、`undefined` 都会在往返中丢失。
+- 容量约 5MB，超出抛 `QuotaExceededError`。
+- 隐私模式、跨站 iframe 中的第三方上下文、浏览器的存储分区策略都可能让它不可用或被隔离。
+- `storage` 事件只在**其它**标签页修改时触发，可用于多标签同步（如登出广播），但同一标签页内不触发。
+
+### IndexedDB 与 Cache Storage
+
+数据量大、需要索引查询、需要离线时用 IndexedDB：它是异步的、支持结构化克隆（能直接存 `Blob`、`Date`、`Map`）、有事务。原生 API 冗长，实践中用 `idb` 之类的薄封装。
+
+Cache Storage 存的是请求与响应对，配合 Service Worker 实现离线与自定义缓存策略；它与 HTTP 缓存是两层，互不替代，见[HTTP 缓存与重新验证](/topics/http-cache)。
+
+## 项目应用
+
+1. 会话凭证一律 `HttpOnly; Secure; SameSite=Lax`（能用 `Strict` 更好），并加 `__Host-` 前缀。
+2. `localStorage` 只放"丢了也无所谓"的偏好：主题、折叠状态、最近访问、未提交的草稿。所有读写包 `try/catch` 并提供默认值。
+3. 存储的键名加应用前缀和版本号（`handbook:v1:progress`），并写好迁移逻辑；老版本的数据结构会一直留在用户机器上。
+4. 把存储访问收敛到一个模块里，其余代码通过函数访问。这样容错、迁移、清理和"隐私模式下降级"只需实现一次。
+5. 提供显式的"清除本地数据"入口，并在隐私说明里写清楚存了什么。
+6. 大数据用 IndexedDB 且放进 Web Worker，避免主线程阻塞。
+
+## 边界与反例
+
+"`localStorage` 更方便所以用它存令牌"是最常见的安全错误。方便的代价是任何脚本都能读——包括第三方依赖和 XSS 注入的代码。
+
+"`SameSite=Strict` 最安全所以全用它"忽略了体验：从邮件或搜索结果点进来时用户会看到未登录状态。常见折中是主会话用 `Lax`，敏感操作再要求二次确认。
+
+"`HttpOnly` 能防住 XSS"不准确。它防的是**凭证被读取带走**，但攻击者仍可以在用户浏览器里以用户身份发请求。防 XSS 要靠输出编码和 CSP。
+
+"清了 Cookie 就退出登录了"在有 `localStorage` 缓存用户信息时不成立；登出流程要显式清理所有存储层。
+
+存储配额是**按站点**分配且可能被浏览器回收（尤其是 Safari 的七天上限和存储压力驱逐）。任何本地数据都必须能从服务端恢复，不能作为唯一真相源。
+
+最后，浏览器正在推进**存储分区**（按顶级站点隔离第三方存储），依赖第三方 Cookie 的方案会持续失效；新设计不要建立在跨站 Cookie 上。
+
+## 面试回答
+
+我按四个维度选：容量、生命周期、是否需要随请求自动发送、能否被脚本读到。需要服务端每次都看到的凭证只能用 Cookie，因为只有它会自动携带，也只有它支持 `HttpOnly` 让脚本读不到。
+
+Cookie 的属性组合是关键：`HttpOnly` 挡住脚本读取，从而抵御 XSS 窃取会话；`Secure` 要求只在 HTTPS 上发送；`SameSite` 决定跨站请求带不带它——`Lax` 是现代默认值，顶级导航的 GET 会带、跨站 POST 和子资源不带；`Strict` 更严但从外站进来会显示未登录；`None` 必须配 `Secure`。另外 `Domain` 和 `Path` 决定作用范围，`__Host-` 前缀能防止子域覆写。要注意 Cookie 不区分端口，隔离粒度比同源策略粗。
+
+存储侧我的默认选择是：不需要服务端看到的偏好用 `localStorage`，标签页级临时状态用 `sessionStorage`，大量结构化数据和离线用 IndexedDB，访问令牌尽量放内存 + 一个 `HttpOnly` 的刷新 Cookie。
+
+最后要强调 `localStorage` 是同步阻塞的、只能存字符串、在隐私模式或配额耗尽时会抛异常，所以读写都要包容错并给默认值。
+
+## 深度追问
+
+1. **JWT 放 `localStorage` 有什么风险？** 同源的任何脚本都能读到它，一次 XSS 或一个被投毒的依赖就能把长期有效的令牌带走，在别处重放。更稳的做法是刷新令牌放 `HttpOnly` Cookie、访问令牌放内存并保持短有效期，同时用 CSP 和输出编码减少 XSS 面。
+2. **`SameSite` 三个值怎么选？** 默认 `Lax`，兼顾安全与"从外部链接进入仍保持登录"；对资金、权限变更这类高敏感站点用 `Strict`，并接受入口体验的损失；只有确实需要被第三方站点嵌入时才用 `None`，且必须加 `Secure`，同时补齐 CSRF 防御。
+3. **`localStorage` 与 IndexedDB 的边界？** `localStorage` 适合几十 KB 以内的简单键值偏好，胜在 API 简单；一旦数据量大、需要结构化查询、需要存二进制或需要在 Worker 里访问，就该用 IndexedDB——它是异步的，不会阻塞主线程，也支持事务和索引。
+
+## 关联专题
+
+- [同源策略与 CORS](/topics/cors-cross-origin)：跨源请求带凭据的前提条件。
+- [CSRF 与身份凭证](/topics/csrf-defense)：Cookie 自动携带带来的攻击面。
+- [XSS 防御与内容安全策略](/topics/xss-defense)：脚本注入才是存储泄露的根因。
+
+## 资料来源
+
+- [MDN — Using HTTP cookies](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies)
+- [MDN — Client-side storage](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Client-side_APIs/Client-side_storage)

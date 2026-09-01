@@ -1,4 +1,4 @@
-import type { TopicLevel, TopicMeta } from '../../content/types';
+import type { TopicLevel, TopicMeta, TopicPractice } from '../../content/types';
 
 export type InterviewQuestion = {
   slug: string;
@@ -15,16 +15,27 @@ export type QuestionFilters = {
   level?: TopicLevel;
 };
 
-export function deriveQuestions(source: TopicMeta[]): InterviewQuestion[] {
-  return source.map(topic => ({
-    slug: topic.slug,
-    chapter: topic.chapter,
-    level: topic.level,
-    title: topic.title,
-    prompt: `请解释：${topic.title}`,
-    answer: topic.interview.answer,
-    followUps: topic.interview.followUps,
-  }));
+/** 题面来自 meta，答案来自按需加载的 practice；没有 practice 的专题不出题。 */
+export function deriveQuestions(
+  source: TopicMeta[],
+  practices: TopicPractice[],
+): InterviewQuestion[] {
+  const bySlug = new Map(practices.map(practice => [practice.slug, practice]));
+
+  return source.flatMap(topic => {
+    const practice = bySlug.get(topic.slug);
+    if (!practice) return [];
+
+    return [{
+      slug: topic.slug,
+      chapter: topic.chapter,
+      level: topic.level,
+      title: topic.title,
+      prompt: `请解释：${topic.title}`,
+      answer: practice.interview.answer,
+      followUps: practice.interview.followUps,
+    }];
+  });
 }
 
 export function filterQuestions(

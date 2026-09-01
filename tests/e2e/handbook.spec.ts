@@ -60,9 +60,12 @@ test('starts the interview timer and reveals the reference answer', async ({ pag
   await expect(page.getByRole('heading', { level: 1, name: '面试训练场' })).toBeVisible();
   await expect(page.getByText('剩余 90 秒')).toBeVisible();
 
-  await page.getByRole('button', { name: '显示参考答案' }).click();
-
-  await expect(page.getByRole('heading', { name: '参考答案' })).toBeVisible();
+  // 题库是惰性分片：预渲染的按钮先出现，事件处理器要等分片到达并完成 hydration。
+  // 重试点击，直到这一次点击真的生效。
+  await expect(async () => {
+    await page.getByRole('button', { name: '显示参考答案' }).click();
+    await expect(page.getByRole('heading', { name: '参考答案' })).toBeVisible({ timeout: 1000 });
+  }).toPass();
 });
 
 test('opens and closes the chapter drawer at a mobile viewport', async ({ page }) => {

@@ -1,0 +1,152 @@
+# 同源策略与 CORS
+
+## 一句话结论
+
+同源策略限制的是**读取**而不是发送；CORS 是服务端通过响应头对浏览器说"这个源可以读我的响应"的协议，它是浏览器侧的保护，永远不能代替服务端鉴权。
+
+## 前置知识
+
+请先阅读[HTTP 缓存与重新验证](/topics/http-cache)，熟悉请求与响应头的作用方式。本文默认读者用过 `fetch`，也见过控制台里那条 "has been blocked by CORS policy" 的报错。
+
+## 核心机制
+
+### 源与同源策略
+
+**源（origin）** 由三部分共同决定：协议、主机、端口。任意一项不同就是跨源。
+
+```text
+https://app.example.com/a       ← 基准
+https://app.example.com/b       同源（路径不影响）
+http://app.example.com          跨源（协议不同）
+https://api.example.com         跨源（子域不同）
+https://app.example.com:8443    跨源（端口不同）
+```
+
+同源策略限制的是**脚本读取另一个源的数据**，而不是发起请求。这条区分极其重要：
+
+- 允许：`<img>`、`<script>`、`<link>`、表单提交、`<iframe>` 加载——这些跨源请求一直能发出，且**会带上 Cookie**。
+- 禁止：用脚本读取跨源响应的正文、读取跨源 iframe 的 DOM、读取跨源的 `localStorage`。
+
+"能发不能读"正是 CSRF 攻击成立的根本原因，见[CSRF 与身份凭证](/topics/csrf-defense)。
+
+### 简单请求
+
+满足全部条件时，浏览器直接发出请求，收到响应后再检查是否允许脚本读取：
+
+- 方法是 `GET`、`HEAD` 或 `POST`；
+- 只包含 CORS 安全头（`Accept`、`Accept-Language`、`Content-Language`、`Content-Type` 及少数几个）；
+- `Content-Type` 只能是 `application/x-www-form-urlencoded`、`multipart/form-data` 或 `text/plain`；
+- 没有注册 `upload` 事件监听器，没有使用 `ReadableStream` 请求体。
+
+```http
+GET /api/items HTTP/1.1
+Origin: https://app.example.com
+
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://app.example.com
+Vary: Origin
+```
+
+注意**请求已经到达服务端并被执行了**，浏览器只是在响应头不匹配时不把内容交给脚本。所以"CORS 报错"不代表服务端没收到请求。
+
+### 预检请求
+
+不满足简单请求条件时（最常见的是 `Content-Type: application/json` 或带了 `Authorization`、`X-Request-Id` 这类自定义头），浏览器先发一次 `OPTIONS`：
+
+```http
+OPTIONS /api/items HTTP/1.1
+Origin: https://app.example.com
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: content-type, authorization
+
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Methods: GET, POST, PATCH, DELETE
+Access-Control-Allow-Headers: content-type, authorization
+Access-Control-Max-Age: 600
+Vary: Origin
+```
+
+预检通过后才发真正的请求。`Access-Control-Max-Age` 让浏览器缓存这次结果（各浏览器有上限），能显著减少 `OPTIONS` 次数。减少预检的其它办法是不加不必要的自定义头，以及确认服务端确实处理了 `OPTIONS`（很多 404 其实是路由没配 `OPTIONS`）。
+
+### 带凭据的请求
+
+Cookie、TLS 客户端证书、`Authorization` 这类凭据默认**不会**跨源发送。要带上，两侧都得配合：
+
+```js
+fetch('https://api.example.com/me', { credentials: 'include' });
+```
+
+```http
+Access-Control-Allow-Origin: https://app.example.com   ← 不能是 *
+Access-Control-Allow-Credentials: true
+Vary: Origin
+```
+
+规则更严的三点：
+
+1. `Allow-Origin` **不能用通配符**，必须回显具体的源。
+2. `Allow-Headers`、`Allow-Methods` 在带凭据时同样不接受 `*`。
+3. 跨站 Cookie 还需要 `SameSite=None; Secure`，否则浏览器根本不会带上，见[浏览器存储与 Cookie](/topics/web-storage-cookies)。
+
+### 能读到哪些响应头
+
+跨源响应默认只暴露七个头：`Cache-Control`、`Content-Language`、`Content-Length`、`Content-Type`、`Expires`、`Last-Modified`、`Pragma`。分页总数、限流剩余次数、追踪 ID 这类自定义头必须显式暴露：
+
+```http
+Access-Control-Expose-Headers: X-Total-Count, X-Request-Id
+```
+
+这是"接口明明返回了 header，前端却读不到"的标准答案。
+
+### Vary: Origin 与缓存
+
+服务端按 `Origin` 动态返回 `Allow-Origin` 时，**必须**加 `Vary: Origin`。否则 CDN 或代理会把为 A 源生成的响应缓存下来发给 B 源，导致时好时坏的 CORS 错误——这类问题往往在灰度或多域名环境才暴露。
+
+## 项目应用
+
+1. 优先用**同源反向代理**：前端和接口挂在同一个域下的不同路径，从根本上消除 CORS 与跨站 Cookie 的复杂度。
+2. 必须跨源时，服务端维护一份**源白名单**并回显匹配到的源，不要用 `Access-Control-Allow-Origin: *` 配合凭据（规范直接禁止），也不要无条件回显请求里的 `Origin`——那等于对所有源开放。
+3. 网关统一处理 `OPTIONS`，设置合理的 `Max-Age`，避免每个业务接口各写一遍。
+4. 需要前端读取的自定义响应头，记得写进 `Expose-Headers` 并在接口文档中标注。
+5. 开发环境用 Vite 的 `server.proxy` 转发接口，让本地行为与生产的同源部署一致，而不是靠关闭浏览器安全策略。
+6. 排查时按顺序看三件事：请求是否发出（Network 里有没有 OPTIONS）、响应头里 `Allow-Origin` 的实际值、以及是否带了凭据。控制台报错文案会直接指出缺哪个头。
+
+## 边界与反例
+
+"CORS 保护了我的接口"是最危险的误解。CORS **放宽**限制而不是施加限制，且只作用于浏览器；`curl`、服务端请求、爬虫完全不受影响。鉴权、限流、越权校验必须在服务端做。
+
+"跨域请求没发出去"通常是错的。除了预检失败的情况，简单请求都已经到达服务端并执行了副作用，只是响应被浏览器拦下不给脚本。用 `POST` 做的写操作即使前端报 CORS 错误，数据也可能已经写入。
+
+"加个 `mode: 'no-cors'` 就好了"会得到一个不透明响应（opaque response）：状态码是 0，读不到任何内容，只能用于"发出去就行"的场景（如某些埋点），不能用来取数据。
+
+同源策略与 CORS 之外还有别的隔离机制：`document.domain` 已被废弃；跨源隔离（COOP/COEP）用于启用 `SharedArrayBuffer`；`postMessage` 是跨源窗口通信的正规通道，必须校验 `event.origin`。
+
+最后，本地开发常见的 `file://` 协议下每个文件都是不同的不透明源，几乎所有请求都会被拦；用本地 HTTP 服务器而不是直接打开 HTML 文件。
+
+## 面试回答
+
+同源策略是浏览器的基础隔离机制，源由协议、主机、端口三者共同决定，任意一项不同就是跨源。它限制的是**读取**而不是发送——跨源的表单提交、图片和脚本加载一直允许，而且会带上 Cookie，只是脚本读不到响应内容。这个区别正是 CSRF 存在的原因。
+
+CORS 是服务端用响应头放宽这个限制的协议。请求分两类：方法是 GET/HEAD/POST、只带安全头、`Content-Type` 限于三种表单或纯文本类型时属于简单请求，直接发出后由浏览器检查响应头决定是否交给脚本；否则先发一个 `OPTIONS` 预检，带上将要使用的方法和自定义头，服务端同意后才发真正的请求。`Access-Control-Max-Age` 可以缓存预检结果减少往返。
+
+带凭据时更严格：前端要设 `credentials: 'include'`，响应必须同时有 `Allow-Credentials: true` 和具体的 `Allow-Origin`，不能用 `*`；跨站 Cookie 还需要 `SameSite=None; Secure`。另外跨源响应默认只能读到七个基础头，其余要用 `Expose-Headers` 暴露；按 `Origin` 动态返回时必须加 `Vary: Origin`，否则 CDN 会串源。
+
+最后强调：CORS 是浏览器侧的保护，不是鉴权，服务端仍然必须自己校验身份和权限。
+
+## 深度追问
+
+1. **哪些请求触发预检，怎么减少？** 非 GET/HEAD/POST 的方法、带自定义头（如 `Authorization`、`X-*`）、或 `Content-Type` 不在三种允许值内时触发。减少办法：设置合理的 `Access-Control-Max-Age` 缓存预检结果、去掉不必要的自定义头、把接口收敛到同源代理下。
+2. **带 Cookie 的跨源请求要满足什么？** 前端 `credentials: 'include'`；服务端 `Allow-Credentials: true` 且 `Allow-Origin` 是具体源不能是 `*`；Cookie 本身要 `SameSite=None; Secure`；预检响应里 `Allow-Headers` 也不能用通配符。任何一条缺失都会被浏览器拦下。
+3. **CORS 能替代鉴权吗？** 不能。它只约束浏览器把响应交给哪些源的脚本，对非浏览器客户端完全无效，而且请求本身已经到达服务端并执行。鉴权、权限校验、限流都必须在服务端完成，CORS 只是减少浏览器环境下的数据泄露面。
+
+## 关联专题
+
+- [HTTP 缓存与重新验证](/topics/http-cache)：`Vary` 的语义与中间缓存行为。
+- [浏览器存储与 Cookie](/topics/web-storage-cookies)：`SameSite` 决定跨站请求是否带凭据。
+- [CSRF 与身份凭证](/topics/csrf-defense)："能发不能读"如何被利用。
+
+## 资料来源
+
+- [MDN — Cross-Origin Resource Sharing (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS)
+- [Fetch Standard — CORS protocol](https://fetch.spec.whatwg.org/#http-cors-protocol)

@@ -1,0 +1,152 @@
+# 代码分割与按需加载
+
+## 一句话结论
+
+代码分割把"体积问题"换成"延迟问题"，所以它必须和预取、稳定的加载占位、以及加载失败处理一起使用；只切不配套，体验往往更差。
+
+## 前置知识
+
+请先阅读[打包、Tree Shaking 与产物](/topics/bundling-tree-shaking)。先把删得掉的删干净，再考虑把删不掉的挪走——顺序反了会得到一堆切得很碎但总量没变的产物。
+
+## 核心机制
+
+### 语法基础
+
+```js
+const { exportToXlsx } = await import('./exporter');
+```
+
+动态 `import()` 是**表达式**：返回 Promise、可以出现在任意位置、路径可以是变量。打包器看到它就在这里切一刀，生成独立 chunk 并注入运行时加载逻辑。这是所有代码分割的基础，细节见[模块系统与 ESM](/topics/module-systems)。
+
+React 里配合 `lazy` 与 `Suspense`：
+
+```jsx
+const Analytics = lazy(() => import('./pages/Analytics'));
+
+<Suspense fallback={<PageSkeleton />}>
+  <Analytics />
+</Suspense>
+```
+
+### 三条分割线
+
+**1. 路由级** —— 默认就该做，收益最大且风险最低：
+
+```jsx
+const routes = [
+  { path: '/', lazy: () => import('./pages/Home') },
+  { path: '/reports', lazy: () => import('./pages/Reports') },
+  { path: '/settings', lazy: () => import('./pages/Settings') },
+];
+```
+
+**2. 交互级** —— 点击后才需要的重组件：富文本编辑器、图表库、地图、二维码扫描、导出功能。
+
+```jsx
+function ExportButton({ rows }) {
+  const [busy, setBusy] = useState(false);
+
+  async function handleClick() {
+    setBusy(true);
+    try {
+      const { exportToXlsx } = await import('./exporter');   // 约 200KB，只在这里下载
+      await exportToXlsx(rows);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 鼠标移上来就开始下载，点击时通常已经就绪
+  return (
+    <button onClick={handleClick} onMouseEnter={() => import('./exporter')} disabled={busy}>
+      {busy ? '导出中…' : '导出'}
+    </button>
+  );
+}
+```
+
+**3. 可见性级** —— 首屏之下的模块，用 `IntersectionObserver` 在接近视口时触发加载。评论区、推荐列表、footer 里的地图都适合。
+
+### 预取：抵消延迟
+
+分割的代价是"用的时候要等"。预取把这段等待挪到用户察觉不到的地方：
+
+- **hover / focus 预取**：鼠标移到链接或按钮上就开始下载，通常能提前 200–300ms。
+- **空闲预取**：`requestIdleCallback` 里预取最可能访问的下一个路由。
+- **视口预取**：链接进入视口即预取（框架的 `<Link prefetch>` 大多这样实现）。
+- **声明式预取**：`<link rel="prefetch" href="…">` 低优先级下载并放入缓存。
+
+预取要节制：在弱网或省流量模式下（`navigator.connection.saveData`）应当关闭，否则是在浪费用户流量。
+
+### 分割带来的新问题
+
+**布局偏移**。异步组件到达前后高度不同会产生 CLS。骨架屏必须与真实内容尺寸一致，见[Core Web Vitals 与性能测量](/topics/web-vitals)。
+
+**加载瀑布**。父 chunk 加载完才发现要加载子 chunk，串成一条链。解法是在路由层面**并行**发起代码与数据请求，而不是"先加载组件、组件挂载后再请求数据"。
+
+**发布后 chunk 404**。新版本上线后旧文件被清理，还停留在旧页面的用户点击时会加载失败：
+
+```js
+async function loadWithRecovery(loader) {
+  try {
+    return await loader();
+  } catch (error) {
+    // 通常是版本已更新导致旧 chunk 消失
+    if (confirm('页面有新版本，是否刷新？')) location.reload();
+    throw error;
+  }
+}
+```
+
+更完善的做法是保留旧版本静态资源一段时间，并在 `ErrorBoundary` 里区分"网络失败可重试"与"版本过期需刷新"。
+
+**过度分割**。切得太碎会带来请求数量上升、公共依赖在多个 chunk 中重复、以及更差的压缩率（小文件压缩效率低）。经验值是：路由级分割 + 少数几个重组件，其余交给打包器的自动分包策略，再用产物分析验证。
+
+## 项目应用
+
+1. 先做路由级分割，测量首屏 JS 体积的变化，再决定是否继续细分。
+2. 找出"体积大 + 使用率低"的模块作为交互级分割的候选：导出、打印、富文本、图表、日期选择器的语言包。
+3. 每个懒加载点都配三样东西：尺寸稳定的骨架、失败重试或刷新提示、以及一个预取时机。
+4. 把第三方依赖单独分包，让业务代码更新时用户不必重新下载它们；但不要把所有 `node_modules` 打成一个巨型 vendor chunk——改一个依赖就全量失效。
+5. 静态资源用内容哈希文件名 + 长期缓存，HTML 不缓存，保证发布后能立即拿到新的入口，见[HTTP 缓存与重新验证](/topics/http-cache)。
+6. 在 CI 里对首屏 chunk 设体积预算，防止分割成果被后续提交慢慢抵消。
+
+## 边界与反例
+
+"分割越细越好"是错的。每个 chunk 都有请求、解析和调度成本，公共代码还可能被重复打包。在 HTTP/2 之后请求变便宜了，但没有变成免费，见[HTTP 版本演进与连接](/topics/http-versions)。
+
+"用了 `lazy` 就一定更快"取决于用户路径。如果 90% 的用户进来就点那个按钮，把它拆出去只是把等待往后挪并多加一次往返。
+
+"预取一切"会挤占带宽并伤害弱网用户；预取应当基于可能性和网络状况，不是默认开启。
+
+"首屏体积小就够了"忽略了**解析与执行**成本：低端设备解析 1MB JavaScript 可能要几百毫秒，这直接体现在 INP 上。
+
+最后，代码分割解决的是"下载了不该下载的代码"；如果问题是"代码本身太多"或"依赖选错了"，应该先回到[打包、Tree Shaking 与产物](/topics/bundling-tree-shaking)。
+
+## 面试回答
+
+代码分割的目的是让首屏只下载和解析真正需要的代码，语法基础是动态 `import()`——它返回 Promise，并天然成为打包器的分割点。
+
+我按三条线切：第一条是**路由级**，每个页面一个 chunk，这是收益最大也最安全的默认策略；第二条是**交互级**，弹窗、富文本编辑器、图表这类点击后才用到的重组件；第三条是**可见性级**，折叠区域或首屏之下的模块用 `IntersectionObserver` 触发加载。
+
+但分割不是免费的，它把体积问题换成了延迟问题，所以要配三样东西：一是**预取**，在 hover、浏览器空闲或能预测下一步时提前下载，让用户感觉不到等待；二是**加载状态**，用尺寸稳定的骨架屏，否则会引入新的布局偏移；三是**失败处理**，发布之后旧 chunk 可能已被清理，动态 `import()` 会 404，需要捕获并提示刷新。
+
+粒度上要克制：切得太碎会产生请求瀑布和重复的公共代码。通常路由加上少数几个重组件就够了，其余交给打包器的自动分包，然后用产物分析验证效果。
+
+## 深度追问
+
+1. **分割带来哪些新问题？** 加载延迟（用预取抵消）、布局偏移（用等尺寸骨架）、加载瀑布（把代码与数据请求并行发起）、发布后旧 chunk 404（保留旧资源 + 捕获错误提示刷新）、以及过度分割导致的请求数上升与公共代码重复。
+2. **什么时候预取，怎么实现？** 当能以合理概率预测下一步时：链接 hover 或 focus、链接进入视口、浏览器空闲、或用户停留在某一步的表单上时预取下一步。实现上直接调用同一个 `import()`（模块缓存会去重），或用 `<link rel="prefetch">`。在 `saveData` 或弱网下应关闭。
+3. **为什么发布后动态 import 会失败？** 静态资源文件名带内容哈希，新版本发布后旧哈希文件可能已被清理或 CDN 已刷新，而用户浏览器里仍是旧版本的 HTML/JS，它请求的是旧文件名。缓解办法是发布后保留旧资源一段时间，并在加载失败时提示用户刷新以获取新版本。
+
+## 关联专题
+
+- [打包、Tree Shaking 与产物](/topics/bundling-tree-shaking)：先删干净再挪走。
+- [模块系统与 ESM](/topics/module-systems)：动态 `import()` 的语义。
+- [Core Web Vitals 与性能测量](/topics/web-vitals)：分割效果最终体现在 LCP 与 INP 上。
+- [React 性能优化](/topics/react-performance)：加载之后的运行时成本。
+
+## 资料来源
+
+- [MDN — Dynamic imports](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/import)
+- [web.dev — Reduce JavaScript payloads with code splitting](https://web.dev/articles/reduce-javascript-payloads-with-code-splitting)
