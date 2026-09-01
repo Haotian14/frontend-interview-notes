@@ -33,7 +33,7 @@ export default function HomePage() {
 
       <section aria-labelledby="chapter-heading">
         <p>01 / KNOWLEDGE SYSTEM</p>
-        <h2 id="chapter-heading">十个知识章节</h2>
+        <h2 id="chapter-heading">十一个知识章节</h2>
         <ol>
           {chapters.map(chapter => (
             <li key={chapter.id}>

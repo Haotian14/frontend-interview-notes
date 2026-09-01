@@ -1,0 +1,140 @@
+# Composition API 与组合式函数
+
+## 一句话结论
+
+Composition API 的价值是把同一业务能力的状态、派生值、副作用和清理放在一起；一个合格的 composable 必须输入明确、输出克制，并能在失效或卸载时完整收尾。
+
+## 前置知识
+
+请先阅读[Vue 3 响应式与依赖追踪](/topics/vue-reactivity)。组合式函数复用的是响应式逻辑，不只是几段普通函数；错误的依赖读取和清理会被一起复用到所有调用方。
+
+## 核心机制
+
+### 从“按选项分类”到“按能力聚合”
+
+Options API 将一个功能拆到 `data`、`computed`、`methods` 和生命周期中。组件变大后，同一能力散在多个位置，而不同能力混在同一选项里。Composition API 允许把“搜索”“上传”“拖拽”等能力分别组织：
+
+```js
+export function useSearch(query) {
+  const result = ref([])
+  const pending = ref(false)
+
+  watch(query, async (value, _old, onCleanup) => {
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+
+    pending.value = true
+    try {
+      result.value = await search(value, controller.signal)
+    } finally {
+      if (!controller.signal.aborted) pending.value = false
+    }
+  }, { immediate: true })
+
+  return { result: readonly(result), pending: readonly(pending) }
+}
+```
+
+这里状态、请求、取消和公开接口都围绕搜索能力，而不是围绕框架选项。
+
+### 输入要归一化
+
+Composable 常希望同时接受普通值、ref 或 getter。Vue 提供 `toValue` 统一读取：
+
+```js
+function useTitle(source) {
+  watchEffect(() => {
+    document.title = toValue(source)
+  })
+}
+
+useTitle('首页')
+useTitle(titleRef)
+useTitle(() => route.meta.title)
+```
+
+是否支持多种输入应写进 API 约定，不要有时自动解包、有时要求 `.value`。如果输入变化需要重新订阅，必须在 watcher 清理旧副作用后再绑定新目标。
+
+### 清理是功能的一部分
+
+最常见的组合式函数 bug 不是“不能工作”，而是多次挂载后工作了很多遍：
+
+```js
+export function useEventListener(target, type, listener) {
+  watchEffect(onCleanup => {
+    const el = toValue(target)
+    if (!el) return
+    el.addEventListener(type, listener)
+    onCleanup(() => el.removeEventListener(type, listener))
+  })
+}
+```
+
+事件、定时器、`ResizeObserver`、WebSocket、请求和第三方实例都有对称清理。清理既发生在组件卸载，也发生在依赖变化导致 effect 重新执行之前。
+
+### 输出要保留控制权
+
+如果调用方只应该读取状态，返回 `readonly(ref)`；变更通过有业务含义的函数完成：
+
+```js
+return {
+  files: readonly(files),
+  addFiles,
+  retryFailed,
+  clearCompleted,
+}
+```
+
+这样调用方不能绕过校验直接改内部数组。返回一个大的 `reactive` 对象虽然使用方便，但被直接解构时容易断开；多个 ref 对 TypeScript 和模板通常更清晰。
+
+### Composable、组件与 store 的边界
+
+- composable：复用有生命周期的逻辑，每个调用方通常得到独立实例；
+- 组件：复用视图与交互结构；
+- Pinia：多个远距离页面需要共享同一份客户端状态；
+- 普通函数：纯计算，不需要响应式和生命周期。
+
+模块顶层创建 ref 会让所有调用者共享单例。它不是绝对错误，但必须是明确设计；SSR 下还可能在请求间泄漏状态。
+
+## 项目应用
+
+1. 把上传队列拆成 `useUploadQueue`，对外只暴露只读任务列表和 pause、resume、retry 等动作。
+2. 拖拽能力用 composable 管理 pointer 事件和坐标转换，视图组件只负责渲染。
+3. 请求型 composable 同时处理 AbortController、竞态、错误重试和卸载清理，避免每个页面重复发明。
+4. 复杂逻辑先提取纯函数，再由 composable 接上响应式外壳；纯函数更容易单元测试。
+5. 需要手动创建和销毁一组 watcher 时使用 `effectScope`，统一 `scope.stop()`。
+
+## 边界与反例
+
+“看到重复代码就抽 composable”会制造难用的万能函数。两处代码长得相似但变化原因不同，过早抽象会让参数和分支越来越多。先确认它们共享的是业务规则而不只是语法。
+
+Composable 不是隐藏全局状态的借口。模块顶层 `const state = ref()` 会形成单例，应明确命名为共享状态，并评估 Pinia 是否更透明。
+
+不要在条件分支或异步回调之后才调用需要当前组件实例的生命周期 API。它们应在 `setup` 同步阶段注册，异步工作放进已注册的回调内部。
+
+提供 `stop` 或 `dispose` 不代表可以省略自动清理。组件使用时应默认安全，显式停止只是额外控制能力。
+
+## 面试回答
+
+Composition API 不是单纯把 Options API 换一种写法，它让状态、派生值、副作用和清理按业务能力聚合，所以复杂组件更容易拆分和复用。一个好的 composable 首先要定义输入输出：如果输入支持普通值、ref 和 getter，就用统一规则读取；输出只暴露必要的只读状态和动作，不把全部内部可变对象交出去。
+
+其次，副作用清理必须属于 API 的一部分。事件监听、定时器、Observer、订阅和请求都要在依赖失效或组件卸载时清理，请求还要取消旧任务，防止过期响应覆盖最新状态。相比 mixin，composable 的数据来源显式、命名冲突由调用方控制、类型能够推导，也可以层层组合。
+
+边界上，每个调用方独立使用的能力适合 composable；远距离组件共享同一份客户端状态更适合 Pinia；纯计算就保持普通函数，不必引入响应式。
+
+## 深度追问
+
+1. **Composable 与 mixin 的主要差异？** 数据和方法来源是显式导入，调用方可以重命名，类型关系清晰，也不会通过合并选项产生隐式冲突。
+2. **怎样处理旧请求覆盖新请求？** watcher 每次重跑前取消旧 AbortController，或给请求加递增版本号，只允许最新版本提交结果。
+3. **模块顶层 ref 有什么风险？** 它让所有调用方共享单例，测试间可能污染；SSR 中如果跨请求复用模块实例，还可能造成用户状态串联。
+
+## 关联专题
+
+- [Vue 3 响应式与依赖追踪](/topics/vue-reactivity)：composable 的状态基础。
+- [Pinia 状态设计与边界](/topics/pinia-state-architecture)：独立逻辑与共享状态的分界。
+- [请求取消与竞态](/topics/abort-race)：请求型 composable 的关键正确性问题。
+
+## 资料来源
+
+- [Vue — Composables](https://vuejs.org/guide/reusability/composables.html)
+- [Vue — Composition API FAQ](https://vuejs.org/guide/extras/composition-api-faq.html)

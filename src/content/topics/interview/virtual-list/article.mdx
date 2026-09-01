@@ -1,0 +1,137 @@
+# 虚拟列表的实现与性能边界
+
+## 一句话结论
+
+虚拟列表通过“完整滚动高度 + 少量可见节点 + 正确偏移”让 DOM 数量与视口相关；固定高度只是索引换算，动态高度真正困难的是测量、查找和滚动锚点稳定。
+
+## 前置知识
+
+请先阅读[浏览器渲染流水线](/topics/rendering-pipeline)。虚拟化主要减少节点创建、样式计算、布局和内存，并不会自动优化每个列表项内部的昂贵 JavaScript。
+
+## 核心机制
+
+### 固定高度模型
+
+已知行高 `itemHeight`、滚动偏移 `scrollTop` 和容器高度 `viewportHeight`：
+
+```ts
+const rawStart = Math.floor(scrollTop / itemHeight)
+const visibleCount = Math.ceil(viewportHeight / itemHeight)
+const start = Math.max(0, rawStart - overscan)
+const end = Math.min(
+  items.length,
+  rawStart + visibleCount + overscan,
+)
+const offsetY = start * itemHeight
+```
+
+结构通常是：
+
+```jsx
+<div className="viewport" onScroll={onScroll}>
+  <div style={{ height: items.length * itemHeight }}>
+    <div style={{ transform: `translateY(${offsetY}px)` }}>
+      {items.slice(start, end).map(renderRow)}
+    </div>
+  </div>
+</div>
+```
+
+外层占位维持完整滚动条范围，内层窗口移到本应出现的位置。真实实现需确保定位元素不额外参与正常流，否则占位与内容会重复撑高。
+
+### overscan
+
+只渲染严格可见的 15 行，快速滚动时 React/Vue 可能来不及提交下一窗口，边缘出现白屏。前后多渲染 2～5 行可以吸收延迟。
+
+overscan 太小会白边、焦点项过早卸载；太大则重新引入 DOM 与渲染成本。可以按滚动方向给前方更大缓冲，停止后恢复对称。
+
+### 滚动处理
+
+scroll 事件频率可能高于帧率，只保存最新 `scrollTop`，在 rAF 中最多计算一次窗口：
+
+```js
+let latest = 0
+let scheduled = false
+
+function onScroll(event) {
+  latest = event.currentTarget.scrollTop
+  if (scheduled) return
+  scheduled = true
+  requestAnimationFrame(() => {
+    scheduled = false
+    updateRange(latest)
+  })
+}
+```
+
+不要给滚动位置使用 200ms 防抖，否则窗口在滚动期间不更新。rAF 合帧或轻量节流更符合视觉语义。
+
+### 动态高度
+
+聊天消息、富文本和图片无法提前知道高度。需要为每项维护测量值，未知项先用估计高度。偏移不再是 `index * itemHeight`，而是前面所有高度之和：
+
+```text
+offset(i) = height(0) + ... + height(i - 1)
+```
+
+数组前缀和可以 O(1) 读偏移，但任意一项高度变化后更新成本 O(n)；大列表可用 Fenwick Tree 或分段结构实现 O(log n) 更新和前缀查询。给定 scrollTop 时，通过二分或树上的前缀查找得到第一个可见索引。
+
+`ResizeObserver` 在元素尺寸变化后更新测量。若视口上方某行由估计 80px 修正为 140px，直接更新总高度会让用户看到的内容向下跳 60px。应记录顶部锚点 id 和它相对视口的偏移，修正后同步调整 scrollTop 保持锚点不动。
+
+### 无限加载不是虚拟化
+
+虚拟化控制渲染节点数，无限加载控制数据何时获取。两者可以组合：窗口接近已加载末尾时触发下一页，但必须去重请求、处理失败重试，并给总量未知的列表设计合理滚动条语义。
+
+### 焦点与可访问性
+
+虚拟化会卸载视口外节点：键盘焦点可能消失，浏览器页内搜索无法找到未渲染文本，屏幕阅读器也看不到完整 DOM。需要：
+
+- 滚动前保留逻辑焦点 id，窗口更新后恢复；
+- 使用稳定 key，不复用错误的输入框状态；
+- 暴露 `aria-setsize`、`aria-posinset` 等集合信息时保证数值准确；
+- 对必须全文搜索或打印的场景提供非虚拟化通道。
+
+## 项目应用
+
+1. 数据超过几百行且每行结构复杂时再引入虚拟化，先用性能分析确认瓶颈确实是节点规模。
+2. 固定高度优先，设计允许时统一行高能显著降低复杂度和滚动跳动。
+3. 动态高度先给接近真实的估计值，图片预留比例，减少测量修正幅度。
+4. 窗口数据和原数据用稳定业务 id 关联，不把可见索引当 key。
+5. 记录窗口计算耗时、渲染节点数、快速滚动掉帧与内存，而不是只看初次加载时间。
+6. 测试滚到首尾、快速反向、列表插入删除、动态高度变化和键盘导航。
+
+## 边界与反例
+
+“列表用了分页就不需要虚拟化”不一定。分页每页 1000 条仍可能卡；反过来，虚拟化也不会减少一次请求下载十万条数据的网络和内存。
+
+“虚拟列表永远更快”不成立。几十项使用虚拟化会增加状态更新、测量和代码体积，普通列表更简单。
+
+“动态高度只要 ResizeObserver”低估了索引结构和滚动锚点。测到高度只是第一步，怎样快速累计偏移并避免内容跳动才是核心。
+
+CSS `content-visibility: auto` 可以让浏览器跳过视口外渲染，但节点仍在 DOM 中，内存、事件和超大树问题仍存在；它是另一种权衡，不等价于窗口化。
+
+## 面试回答
+
+虚拟列表的核心是让 DOM 数量与视口高度相关，而不是与数据总量相关。固定高度时，用 `floor(scrollTop / itemHeight)` 得到开始索引，用 `ceil(viewportHeight / itemHeight)` 得到可见数量，前后增加 overscan；外层元素提供完整列表总高度，内部只渲染窗口数据并通过 translateY 移到正确位置。滚动事件用 requestAnimationFrame 合帧，避免一帧重复计算。
+
+动态高度不能直接相除，需要用 ResizeObserver 测量真实高度，维护前缀和或 Fenwick Tree，再从 scrollTop 二分找到索引。估计高度被修正时要保持顶部可见项作为锚点并补偿 scrollTop，否则内容会跳动。
+
+虚拟化也有边界：数据不够大时复杂度不值得；它会影响焦点、屏幕阅读器和浏览器页内搜索；无限加载与虚拟化分别解决数据获取和渲染规模，不能混为一谈。
+
+## 深度追问
+
+1. **固定高度怎样计算？** 起点是 floor(scrollTop / 行高)，可见数是 ceil(容器高 / 行高)，再在两侧加入 overscan，并以 start × 行高作为偏移。
+2. **动态高度怎样快速查找？** 保存每项测量高度，用可更新的前缀和结构计算偏移；给定 scrollTop 时二分或在 Fenwick Tree 上查找对应索引。
+3. **高度变化怎样避免跳动？** 选顶部可见项为锚点，记录其相对视口位置；更新测量后调整 scrollTop，让同一锚点保持在原位置。
+4. **为什么不能用索引做 key？** 窗口不断复用位置，插入排序后索引对应的数据改变，输入状态和组件实例可能被错误复用到另一个条目。
+
+## 关联专题
+
+- [无限画布的状态与渲染架构](/topics/infinite-canvas-architecture)：可见性查询与大规模渲染的共同边界。
+- [React 性能优化](/topics/react-performance)：窗口更新仍需控制组件渲染成本。
+- [Core Web Vitals 与性能测量](/topics/web-vitals)：用 INP 和长任务判断优化效果。
+
+## 资料来源
+
+- [web.dev — Virtualize large lists](https://web.dev/articles/virtualize-long-lists-react-window)
+- [MDN — ResizeObserver](https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserver)

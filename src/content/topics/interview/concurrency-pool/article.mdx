@@ -1,0 +1,139 @@
+# 手写 Promise 并发池
+
+## 一句话结论
+
+并发池要限制的是“已经启动但尚未结束”的任务数量，因此输入必须是可启动任务的函数；固定数量 worker 共享索引，是兼顾正确性、顺序和实现复杂度的稳定方案。
+
+## 前置知识
+
+请先阅读[Promise 状态机与组合](/topics/promise-semantics)。`Promise.all` 负责等待一组结果，却不会限制数组中任务何时启动；当数组由 `fetch()` 调用组成时，请求在交给 all 之前已经发出。
+
+## 核心机制
+
+### 最小实现
+
+```ts
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new RangeError('limit 必须是正整数')
+  }
+
+  const results = new Array<R>(items.length)
+  let cursor = 0
+
+  async function worker() {
+    while (true) {
+      const index = cursor++
+      if (index >= items.length) return
+      results[index] = await task(items[index], index)
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length)
+  await Promise.all(Array.from({ length: workerCount }, worker))
+  return results
+}
+```
+
+JavaScript 单线程执行 `const index = cursor++`，在下一次 `await` 让出之前不会被另一个 worker 插入，所以每个索引只会被领取一次。每个 worker 同一时刻只 await 一个任务，worker 数量就是并发上限。
+
+结果写入 `results[index]`，因此任务完成顺序可以是 3、1、2，最终数组仍与输入顺序一致。
+
+### 为什么不能传 Promise 数组
+
+```js
+// 构造数组时 fetch 已经开始，并发池来不及限制
+const requests = urls.map(url => fetch(url))
+
+// 正确：把启动权交给池
+const tasks = urls.map(url => () => fetch(url))
+```
+
+Promise 表示一个已经进行中的结果，不是可重复调用的任务描述。池必须在槽位空闲时才调用函数，才能真正控制启动时间。
+
+### 失败策略
+
+上面的实现是 fail-fast：任何 worker 抛错，外层 `Promise.all` 尽快 reject。但其它 worker 已经启动的请求仍继续运行。若业务要求停止，需要把同一个 `AbortSignal` 传入 task：
+
+```ts
+const controller = new AbortController()
+
+try {
+  await mapLimit(files, 3, file => upload(file, controller.signal))
+} catch (error) {
+  controller.abort(error)
+  throw error
+}
+```
+
+批量上传通常希望展示每一项结果，可以在 worker 内捕获：
+
+```ts
+results[index] = await task(item, index).then(
+  value => ({ status: 'fulfilled', value }),
+  reason => ({ status: 'rejected', reason }),
+)
+```
+
+失败策略属于 API 合同，不能等线上出错再决定。
+
+### 重试、优先级与动态任务
+
+重试应占用当前 worker 槽位，否则失败后把重试任务重新塞回队尾，短时间可能绕过原并发边界。只对可重试错误限制次数并指数退避。
+
+需要高低优先级时，把共享 cursor 换成优先队列；要避免低优先级永远饿死，可以让等待时间逐渐提高有效优先级。
+
+如果任务会在运行期间动态加入，固定数组不再够用，需要显式队列、空闲 worker 唤醒机制和一个“队列关闭且 active 为零”的完成条件。
+
+### 并发限制不等于速率限制
+
+并发为 3 表示最多三个请求在途。如果每个请求 10ms，一秒仍可能启动 300 个。API 规定每秒 10 次时，需要令牌桶、漏桶或滑动窗口；工程里经常同时使用并发池和速率限制器。
+
+## 项目应用
+
+1. 多文件上传根据网络和单文件大小设置并发 2～4，每项支持取消、重试和独立进度。
+2. 批量生成任务用 all-settled 语义，失败项单独重试，不让一个错误清空全部成功结果。
+3. 图片预加载按视口距离设置优先级，并在元素离开页面时取消未完成请求。
+4. 对 429 读取服务端重试提示；不要通过提高并发对抗限流。
+5. 监控 active、queued、平均等待时间与失败率，动态调参要以数据为依据。
+6. 单测使用可控 Promise，手动 resolve/reject，断言 active 从不越界以及结果顺序正确。
+
+## 边界与反例
+
+“JavaScript 单线程所以不存在并发”混淆了执行线程和异步 I/O。请求、文件读取等任务可以同时在浏览器或系统层进行，JavaScript 负责调度回调。
+
+“外层 Promise reject 就取消了所有任务”不成立。Promise 没有通用取消语义，底层 API 必须显式支持 AbortSignal 或自己的 cancel。
+
+“limit 越大越快”只在资源充足时成立。连接竞争、服务端限流、内存和主线程处理可能让更高并发反而更慢。
+
+不要用 `items.splice()` 让多个 worker 领取任务：它修改调用方数组，并让输入索引和结果顺序更难维护。共享只增 cursor 更清晰。
+
+## 面试回答
+
+实现并发池最稳定的方式是启动 `min(limit, items.length)` 个 worker，共享一个只递增 cursor。每个 worker 循环领取下一个索引，await 任务后把结果写回该索引。这样同时在途任务不超过 worker 数量，而结果数组仍保持输入顺序。
+
+池应该接收任务函数而不是 Promise 数组，因为 Promise 通常在创建时已经开始，等传入池时无法限制启动。开始前还要校验 limit 是正整数并处理空数组。
+
+失败策略要写进合同：fail-fast 让外层尽快 reject，但已启动任务不会自动停止，必须通过共享 AbortController 取消；批量上传更适合收集每项 fulfilled/rejected。并发限制只控制同时在途数量，不限制每秒启动次数，严格速率限制还需要令牌桶等机制。
+
+## 深度追问
+
+1. **共享 cursor 会发生重复领取吗？** cursor++ 到第一个 await 之间是同步代码，不会被另一个 worker 穿插，因此索引领取是互斥的。
+2. **怎样保持结果顺序？** 捕获输入 index，把完成值写回固定位置，不使用 push；push 只能得到完成顺序。
+3. **失败后如何停止？** 捕获首个错误并调用 AbortController，task 内部必须把 signal 传到底层 API；不支持取消的任务只能等待其自然结束并忽略结果。
+4. **如何支持动态任务？** 使用显式队列和 worker 唤醒信号，完成条件改为队列已关闭且 active 为零，而不是固定数组全部领取。
+
+## 关联专题
+
+- [Promise 状态机与组合](/topics/promise-semantics)：组合等待与任务启动的区别。
+- [请求取消与竞态](/topics/abort-race)：失败即停和页面卸载时的取消。
+- [虚拟列表的实现与性能边界](/topics/virtual-list)：另一类按资源预算限制工作量的问题。
+
+## 资料来源
+
+- [MDN — Promise.all](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all)
+- [MDN — AbortController](https://developer.mozilla.org/en-US/docs/Web/API/AbortController)

@@ -1,0 +1,118 @@
+# Vue 更新调度与 nextTick
+
+## 一句话结论
+
+Vue 会把同一轮同步修改产生的组件任务去重后放进微任务统一刷新；`nextTick` 等的是这批 Vue DOM 更新完成，不等于浏览器已经绘制，也不等待网络资源。
+
+## 前置知识
+
+请先阅读[Vue 3 响应式与依赖追踪](/topics/vue-reactivity)和[事件循环与任务队列](/topics/event-loop)。响应式系统回答“谁需要更新”，调度器回答“什么时候、以什么顺序更新”。
+
+## 核心机制
+
+### 为什么不立即改 DOM
+
+```js
+count.value++
+count.value++
+count.value++
+```
+
+如果每次写入都同步执行组件 render 和 DOM patch，中间的 1、2 状态通常没有展示价值。Vue 将组件更新任务加入队列，以任务身份去重，在当前同步代码结束后的微任务里统一刷新，所以最终通常只渲染一次 3。
+
+这个策略同时保证顺序：父组件通常先于子组件更新，已卸载组件的任务可以跳过，更新过程中新增的任务能插入稳定位置。调度不只是“包一层 Promise”，还承担去重和顺序控制。
+
+### 一轮更新的时间线
+
+```text
+同步事件处理
+  修改响应式状态
+  组件 job 入队并去重
+同步栈结束
+  微任务：pre watcher
+  微任务：组件 render 与 DOM patch
+  微任务：post watcher
+  nextTick 回调
+浏览器选择合适时机执行样式、布局与绘制
+```
+
+浏览器绘制不属于 JavaScript 微任务。即使 `await nextTick()` 返回，像素也可能还没呈现到屏幕；需要确保至少经过一帧时再等待 `requestAnimationFrame`。
+
+### nextTick 的准确语义
+
+```js
+message.value = '已保存'
+console.log(el.textContent) // 旧文本
+
+await nextTick()
+console.log(el.textContent) // 当前批次 patch 后的文本
+```
+
+适合场景包括：列表增加一项后滚动到末尾、条件渲染输入框后聚焦、内容变化后测量高度。能用声明式样式和生命周期解决的问题，不要到处插 `nextTick`；大量依赖它往往意味着代码在手动协调 DOM。
+
+`nextTick` 不会等待：
+
+- 图片和字体加载；
+- `fetch` 或其它异步请求；
+- 下一轮定时器产生的状态修改；
+- 浏览器一定完成视觉绘制。
+
+### watcher 的 flush
+
+```js
+watch(source, () => {
+  // 默认 flush: 'pre'
+})
+
+watch(source, measure, { flush: 'post' })
+watch(source, validateTinyFlag, { flush: 'sync' })
+```
+
+默认 watcher 在父组件更新后、所属组件 DOM 更新前执行，适合计算下一步状态和发请求。要读取更新后的所属 DOM，使用 `flush: 'post'`。`sync` 跳过批处理，每次修改都会立即执行，只适合非常轻量且不会被同步高频修改的数据。
+
+### 虚拟 DOM 不是全量比较
+
+Vue 模板编译器知道哪些节点是静态的、哪些属性可能变化，会生成 patch flag 和 block tree，让运行时集中检查动态部分。列表仍然依赖稳定的 `key` 识别节点身份；用索引做 key 会在插入和排序时复用错误的局部状态。
+
+## 项目应用
+
+1. 保存按钮连续修改 loading、message、disabled 时依赖批处理，不需要手动合并 set。
+2. 自动滚动先修改列表数据，`await nextTick()` 后读取容器的 `scrollHeight`；若动画依赖已绘制帧，再接 `requestAnimationFrame`。
+3. DOM 测量型 watch 使用 `flush: 'post'`，数据请求使用默认 pre，不要所有 watcher 都无脑 post。
+4. 高频拖拽中避免 sync watcher；把每帧视觉更新放进 rAF，把最终状态在 pointerup 时提交。
+5. 列表使用业务 id 作为 key。key 表达身份，不是为了消除控制台警告。
+
+## 边界与反例
+
+“DOM 更新是异步的”不代表响应式值异步。赋值后 `count.value` 立即是新值，延迟的是组件更新与 DOM patch。
+
+“nextTick 后页面一定已经画出来”不准确。它等 Vue 的更新 Promise，不控制浏览器绘制时机。做截图、动画起始帧或像素观察时应理解 rAF 与渲染流水线。
+
+“批处理一定减少所有工作”也不成立。一次更新仍可能因为过大的组件边界而创建海量 VNode；调度只能合并重复任务，不能替代组件拆分和列表虚拟化。
+
+不要在 updated 钩子里无条件修改会影响当前组件渲染的状态，否则可能形成更新循环。
+
+## 面试回答
+
+Vue 修改响应式状态后不会立即同步 patch DOM，而是把组件更新任务放进调度队列，并在微任务阶段批量刷新。同一个组件在一轮同步代码中被触发多次，任务会按身份去重，所以连续修改三次状态通常只更新一次 DOM。这既避免中间状态的无效渲染，也能维持父子组件的稳定更新顺序。
+
+`nextTick` 返回当前刷新任务对应的 Promise，等待它表示这一批 Vue DOM 更新已经完成，适合更新状态后读取尺寸、滚动或聚焦。但它不保证浏览器已经视觉绘制，也不等待图片、字体和接口；要跨到下一帧应使用 `requestAnimationFrame`。
+
+watch 的 flush 决定副作用时机：默认 pre 在所属组件 DOM 更新前，post 在更新后，sync 则立即执行并跳过批处理。sync 在数组循环修改等高频场景里很危险，应该只用于极少量简单状态。
+
+## 深度追问
+
+1. **为什么更新任务需要去重？** 一轮事件里同一组件可能被多个依赖连续触发，最终界面只需要最新状态；去重可以避免重复 render 和 patch。
+2. **nextTick 与 rAF 的区别？** nextTick 由 Vue 调度队列决定，保证框架的 DOM patch 完成；rAF 由浏览器在下一次绘制前调用，更接近帧边界。
+3. **什么时候使用 flush: post？** 副作用必须读取所属组件更新后的 DOM 时，例如测量尺寸；单纯请求数据或计算下一状态不需要 post。
+
+## 关联专题
+
+- [Vue 3 响应式与依赖追踪](/topics/vue-reactivity)：更新任务从何而来。
+- [事件循环与任务队列](/topics/event-loop)：微任务与浏览器渲染的关系。
+- [协调算法与 key](/topics/reconciliation-keys)：组件身份与列表复用的共同原则。
+
+## 资料来源
+
+- [Vue — nextTick](https://vuejs.org/api/general.html#nexttick)
+- [Vue — Rendering Mechanism](https://vuejs.org/guide/extras/rendering-mechanism.html)
