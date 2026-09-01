@@ -1,0 +1,143 @@
+# 自动保存、队列与冲突控制
+
+## 一句话结论
+
+自动保存的目标不是“频繁调用保存接口”，而是让用户最新意图有序、可重试、可恢复地到达服务端，并在基线已经变化时拒绝静默覆盖。
+
+## 前置知识
+
+请先阅读[async/await 与错误处理](/topics/async-await-errors)和[请求取消与竞态](/topics/abort-race)。自动保存同时面对高频输入、乱序响应、断网、刷新、多标签页和多端编辑，单纯 debounce 只解决了请求数量。
+
+## 核心机制
+
+### 先定义保存单位
+
+不同操作不能共用同一个“2 秒防抖”：
+
+- 新建、删除、粘贴等离散操作完成后立即标记 dirty；
+- 拖拽、缩放、旋转在交互结束时提交最终状态，不记录 pointermove；
+- 文本输入适合短防抖，但失焦、切换节点和主动关闭前要 flush；
+- 视口平移缩放通常不属于文档，不应触发内容保存。
+
+保存单位最好是语义操作或归并后的 patch，而不是每次都上传完整文档，也不是把每个底层事件原样写入日志。
+
+### 单写者队列
+
+如果 A、B 两次保存并发，B 先返回、A 后返回，服务端可能最终留下旧 A。客户端可以让同一文档只有一个请求在途：
+
+```ts
+let inFlight = false
+let pendingPatch = null
+
+function enqueue(patch) {
+  pendingPatch = merge(pendingPatch, patch)
+  void drain()
+}
+
+async function drain() {
+  if (inFlight || !pendingPatch) return
+  inFlight = true
+  const patch = pendingPatch
+  pendingPatch = null
+
+  try {
+    const result = await save(patch)
+    revision = result.revision
+  } catch (error) {
+    pendingPatch = merge(patch, pendingPatch)
+    scheduleRetry(error)
+  } finally {
+    inFlight = false
+    if (pendingPatch) void drain()
+  }
+}
+```
+
+请求期间的新修改继续归并到 pending；当前请求完成后再发送最新结果。合并必须理解操作语义：同一属性多次修改可保留最后一次，但“创建后删除”可以互相抵消，“删除后修改”则应按规则拒绝或忽略。
+
+### 串行仍解决不了多端冲突
+
+队列只约束当前客户端。另一个标签页或设备可能基于同一版本保存，所以请求必须带基线：
+
+```http
+PATCH /documents/42
+If-Match: "revision-17"
+Idempotency-Key: 78c0...
+```
+
+服务端只有当前版本仍为 17 才应用变更，成功返回 revision 18；否则返回 412 或业务约定的 409。客户端不能把冲突当网络错误自动覆盖，应拉取最新版本，根据数据类型选择：
+
+- 不同节点或不同字段可自动合并；
+- 同一文本同一区域需 OT/CRDT 或人工选择；
+- 删除与编辑冲突要有明确产品规则。
+
+`operationId` 或幂等键保证超时重试不会重复创建、扣费或追加同一操作。
+
+### 状态机而不是一个 loading
+
+界面至少区分：
+
+```ts
+type SaveState =
+  | { status: 'saved'; revision: number }
+  | { status: 'dirty' }
+  | { status: 'saving' }
+  | { status: 'offline'; pending: number }
+  | { status: 'conflict'; serverRevision: number }
+  | { status: 'error'; retryable: boolean }
+```
+
+“保存中”结束不等于“全部已保存”：请求返回时 pending 里可能还有更新。只有没有 inFlight 且 pending 为空，才能显示已保存。
+
+### 重试、离线与刷新恢复
+
+超时、断网、429 和部分 5xx 可以指数退避并加入随机抖动；校验错误、权限错误和冲突不能盲目重试。重试前确认操作幂等，并在重新联网时立即唤醒队列。
+
+未确认的语义操作写入 IndexedDB，服务端确认后再删除。页面刷新后先恢复本地队列，再与服务端 revision 对齐。localStorage 是同步 API，容量和结构化能力有限，不适合大型文档队列。
+
+`beforeunload` 不能可靠等待普通异步请求。小型最终信号可考虑 `sendBeacon`，关键内容仍应在用户操作过程中持续落入 IndexedDB 和服务端，而不是押在关闭瞬间。
+
+## 项目应用
+
+1. 每个文档维护 `revision`、`inFlight`、`pending` 和持久化 operation log，保存 UI 从状态机派生。
+2. 拖拽开始只记录 before，过程中预览，结束生成 after patch；两秒内继续移动同一节点可以在历史层决定是否合并。
+3. 文本输入防抖 500～1000ms，并在 blur、切换文档、执行导出前调用 flush。
+4. API 返回服务端接受的 revision 和规范化结果，客户端不要自行猜测保存成功后的版本。
+5. 测试乱序、重复响应、断网恢复、刷新恢复、双标签页冲突和权限过期，而不只测正常网络。
+6. 监控保存延迟、失败率、队列长度和冲突率；“两秒内保存完成”应有可观测指标支撑。
+
+## 边界与反例
+
+“所有请求串行就不会覆盖”只对单标签页成立。服务端没有版本条件时，多端仍然是最后写入者静默覆盖。
+
+“完整快照最简单”在小文档可能合理，但文档变大后带宽、冲突粒度和写入成本都会失控。可以定期做快照，日常提交 patch 或命令。
+
+“失败就无限重试”会放大服务故障和耗尽电量。必须区分可重试错误，设置上限和抖动，并给用户明确恢复入口。
+
+“离线队列就是协同编辑”不成立。离线队列保证操作不丢，真正的并发文本或结构编辑仍需要冲突合并算法与业务规则。
+
+## 面试回答
+
+可靠的自动保存不是简单 debounce。我会先按操作语义确定提交时机：离散操作立即入队，拖拽缩放只在结束时提交最终状态，文本输入短防抖并在失焦时 flush。客户端使用单写者队列，同一文档只允许一个请求在途；请求期间的新修改继续归并，响应后再提交最新结果，避免本客户端乱序覆盖。
+
+每次保存携带 operationId 和 baseRevision，服务端用 revision 或 ETag 做乐观并发控制。基线过旧返回 409/412，客户端拉最新版本后按字段或节点合并，无法安全合并时让用户选择。幂等键保证超时重试不会重复产生副作用。
+
+网络失败只对可重试错误指数退避，未确认操作写入 IndexedDB 支持刷新和离线恢复。界面区分 dirty、saving、saved、offline、conflict 和 error；只有在途请求和 pending 都为空时才是真正已保存。
+
+## 深度追问
+
+1. **串行队列为什么不够？** 它只规定一个客户端的顺序，另一个标签页或设备仍可能基于旧版本写入，所以服务端必须校验 baseRevision。
+2. **怎样合并 pending patch？** 同一实体同一属性通常保留最后值；创建后删除可抵消；数组顺序、删除与修改等结构冲突必须使用语义操作而不是浅对象合并。
+3. **哪些错误能自动重试？** 断网、超时、429 和临时 5xx；400 校验、401/403 权限和 409/412 冲突需要修正输入、重新认证或进入冲突流程。
+4. **关闭页面如何保数据？** 平时就把未确认操作落 IndexedDB 并持续保存；关闭瞬间最多用 beacon 发送小信号，不能依赖 beforeunload 等待普通异步请求。
+
+## 关联专题
+
+- [无限画布的状态与渲染架构](/topics/infinite-canvas-architecture)：高频交互怎样变成语义保存单元。
+- [HTTP 缓存与重新验证](/topics/http-cache)：ETag 和条件请求的协议基础。
+- [请求取消与竞态](/topics/abort-race)：异步结果顺序与生命周期控制。
+
+## 资料来源
+
+- [MDN — ETag](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/ETag)
+- [MDN — IndexedDB API](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API)

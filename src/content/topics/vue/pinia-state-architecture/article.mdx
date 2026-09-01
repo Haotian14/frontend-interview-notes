@@ -1,0 +1,118 @@
+# Pinia 状态设计与边界
+
+## 一句话结论
+
+Pinia 只应该保存真正需要跨组件、跨页面共享的客户端状态；接口缓存、URL 状态和局部交互各有更合适的位置，全部塞进 store 只会制造多个真相源。
+
+## 前置知识
+
+请先阅读[Composition API 与组合式函数](/topics/composition-composables)。Setup Store 本质上使用 ref、computed 和函数组织共享状态，因此响应式与生命周期边界仍然存在。
+
+## 核心机制
+
+### 先按来源分类
+
+在写 `defineStore` 前先问：
+
+1. 来自接口吗？它是服务端缓存，需要失效、去重、重取和竞态处理。
+2. 刷新或分享链接后要保留吗？筛选、分页、标签应优先进入 URL。
+3. 只有当前组件使用吗？留在组件局部。
+4. 多个远距离组件必须共享且属于客户端吗？这才是 Pinia 的核心场景。
+
+典型 store 包括登录身份、权限摘要、主题、跨页面草稿和长期流程状态。把接口列表复制到 store，再让请求库也保存一份，会立刻产生两个真相源。
+
+### state、getter、action
+
+```js
+export const useCartStore = defineStore('cart', () => {
+  const lines = ref([])
+  const count = computed(() =>
+    lines.value.reduce((sum, line) => sum + line.quantity, 0),
+  )
+
+  function add(product) {
+    const line = lines.value.find(item => item.id === product.id)
+    if (line) line.quantity++
+    else lines.value.push({ id: product.id, quantity: 1 })
+  }
+
+  function clear() {
+    lines.value = []
+  }
+
+  return { lines, count, add, clear }
+})
+```
+
+state 保存最小事实，getter 计算派生值，action 封装业务动作。不要同时保存 `lines` 和 `count`；两份可写状态迟早不同步。
+
+### 解构陷阱
+
+Store 是 reactive 对象。直接解构 state/getter 得到当前值，后续更新失去连接：
+
+```js
+const store = useCartStore()
+const { lines, count } = storeToRefs(store)
+const { add } = store // action 已绑定 store，可以直接解构
+```
+
+`storeToRefs` 只提取响应式属性，跳过 action 和非响应式字段。这与 reactive 对象的解构边界一致。
+
+### 持久化不是全量 JSON.stringify
+
+持久化前要确定：
+
+- 哪些字段真的需要跨会话；
+- 数据何时过期；
+- schema 升级后怎样迁移；
+- 用户退出时怎样清理；
+- 是否包含 token、个人信息等不应进入 localStorage 的内容。
+
+从存储恢复时先校验版本和结构，失败就回退默认值。不要持久化可以从服务端重新获取的数据、loading/error 等瞬时状态和大型二进制对象。
+
+### SSR 隔离与水合
+
+SSR 服务器会同时处理多个用户。Pinia 实例必须按请求创建，不能在进程级共享；服务端状态序列化进 HTML 时要安全转义，客户端再用同一初始状态水合。否则可能发生用户数据串联或脚本注入。
+
+## 项目应用
+
+1. 权限 store 只保存当前用户与权限摘要，具体业务列表由请求缓存层管理。
+2. 多步骤创作流程保存跨页面草稿 id、当前步骤和未提交配置；输入控件自己的 hover、展开状态仍留局部。
+3. Action 使用业务名称，如 `submitDraft`、`discardChanges`，而不是让组件到处组合五次直接赋值。
+4. 持久化插件配置白名单和版本号，登录切换时清空用户相关 store。
+5. 测试 action 时创建独立 Pinia，避免测试用例共享状态；需要替身时使用 Pinia 的测试工具。
+
+## 边界与反例
+
+“用了 Pinia 就不需要请求库”混淆了客户端状态与服务端缓存。手动实现缓存失效、并发去重、后台重取和乐观更新的成本远大于几个 action。
+
+“所有共享状态都必须全局”也不成立。只在一个页面子树共享的状态可以由页面组件 provide，生命周期随页面结束，更容易推理。
+
+Store 拆得越多不一定越好，也不必追求一个巨型 store。按业务所有权和变化原因拆分，比按页面数量或字段数量拆分更稳定。
+
+不要在 getter 中产生请求、写存储或修改其它状态；getter 应保持派生计算语义，副作用放 action。
+
+## 面试回答
+
+我不会因为项目用了 Vue 就把全部状态放进 Pinia，而是先按来源分类。接口数据本质上是远端缓存，交给请求层处理失效、去重和重取；筛选、分页等可分享状态放 URL；输入框和弹窗留局部；登录身份、权限、跨页面草稿等真正的客户端共享状态才进入 store。
+
+Pinia 里 state 保存最小事实，getter 表达派生值，action 封装有业务意义的变更。使用时要注意 store 是 reactive 对象，直接解构 state 和 getter会失去响应式，应使用 `storeToRefs`，action 可以直接解构。
+
+持久化要保存白名单字段并处理过期、版本迁移和退出清理，不能把 token 和全部接口数据无脑写进 localStorage。SSR 中则要为每个请求创建独立 Pinia 实例并安全序列化初始状态，避免不同用户之间共享数据。
+
+## 深度追问
+
+1. **哪些数据不应放 Pinia？** 服务端缓存、URL 可表达的筛选分页、只在单组件使用的交互状态，以及可以由其它状态计算的重复字段。
+2. **为什么要使用 storeToRefs？** Store 是 reactive 代理，直接解构会绕开后续代理读取；storeToRefs 为每个响应式属性创建保持连接的 ref。
+3. **持久化有哪些风险？** 旧 schema 恢复失败、敏感数据泄露、不同账号串数据、过期状态覆盖服务端事实以及存储容量和同步读写成本。
+
+## 关联专题
+
+- [Composition API 与组合式函数](/topics/composition-composables)：局部复用与全局共享的分界。
+- [状态归属与 Context 边界](/topics/state-architecture)：跨框架通用的状态分类。
+- [浏览器存储与 Cookie](/topics/web-storage-cookies)：持久化的安全和容量边界。
+
+## 资料来源
+
+- [Pinia — Core Concepts](https://pinia.vuejs.org/core-concepts/)
+- [Pinia — Server Side Rendering](https://pinia.vuejs.org/ssr/)

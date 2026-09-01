@@ -23,6 +23,20 @@ describe('content registry', () => {
     expect(chapterTopics.every(topic => topic.chapter === 'javascript-async')).toBe(true);
   });
 
+  test('ships the Vue and project-practice expansion as a 50-topic handbook', () => {
+    expect(topics).toHaveLength(50);
+    expect(getChapterTopics('vue').map(topic => topic.slug)).toEqual([
+      'vue-reactivity',
+      'vue-render-nexttick',
+      'composition-composables',
+      'pinia-state-architecture',
+    ]);
+    expect(getTopic('infinite-canvas-architecture')?.chapter).toBe('engineering');
+    expect(getTopic('autosave-conflict-control')?.chapter).toBe('engineering');
+    expect(getTopic('concurrency-pool')?.chapter).toBe('interview');
+    expect(getTopic('virtual-list')?.chapter).toBe('interview');
+  });
+
   test('loads the MDX module lazily', async () => {
     const module = await loadTopic('event-loop');
     expect(module.default).toBeTypeOf('function');

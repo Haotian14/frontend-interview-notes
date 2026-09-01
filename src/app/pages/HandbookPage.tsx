@@ -13,7 +13,7 @@ export default function HandbookPage() {
       <header>
         <p>HANDBOOK / INDEX</p>
         <h1 tabIndex={-1}>完整手册目录</h1>
-        <p>十个章节构成从基础机制到工程决策的复习主干。</p>
+        <p>十一个章节构成从基础机制到工程决策的复习主干。</p>
         <p className="handbook-progress" aria-live="polite">
           已读完 {done} / {topics.length} 篇
           {done > 0 && (
