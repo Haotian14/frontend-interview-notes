@@ -38,7 +38,16 @@ export type TopicMeta = {
   sources: ContentSource[];
   searchText: string;
   hasCode: boolean;
-  /** hasCode 为 true 时必填，驱动 /code 的条目内容。 */
+};
+
+/**
+ * 面试答案、速查表和代码条目按专题单独成文件，由专题页、/interview、/reference
+ * 和 /code 按需加载。它们只服务各自的页面，放进 meta.ts 会让每个访客都下载
+ * 全部专题的长文本。meta 只保留 hasCode 这类列表页就要用到的标记。
+ */
+export type TopicPractice = {
+  slug: string;
+  /** meta.hasCode 为 true 时必填，驱动 /code 的条目内容。 */
   code?: CodeSpec;
   /** 可选，驱动 /reference 的一张速查表。 */
   reference?: ReferenceTable;

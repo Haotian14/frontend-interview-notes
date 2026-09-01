@@ -1,0 +1,145 @@
+# Promise 状态机与组合
+
+## 一句话结论
+
+Promise 是一个只能落定一次的状态机，`then` 永远返回**新的** Promise，回调的返回值（普通值、thenable、抛出的异常）决定下一环的状态——链式转换的全部规则就这三条。
+
+## 前置知识
+
+请先阅读[事件循环与任务队列](/topics/event-loop)，理解微任务与宏任务的调度差别。本文默认读者写过 `fetch().then()`，关注点是语义精确性而非入门用法。
+
+## 核心机制
+
+### 一次性状态机
+
+一个 Promise 处于三种状态之一：`pending`、`fulfilled`、`rejected`。转换只发生一次且不可逆，已落定（settled）之后再调用 `resolve`/`reject` 会被静默忽略。
+
+这正是它相对回调的价值：回调可能被调用零次、多次，或者同时以成功和失败两种方式调用；Promise 从结构上排除了这些可能。此外，**注册时机不影响结果**——给一个已经落定的 Promise 加 `then`，回调依然会（在下一个微任务）被调用。
+
+### then 的三条规则
+
+```js
+Promise.resolve(1)
+  .then(v => v + 1)                  // 返回普通值 → 下一环以 2 兑现
+  .then(v => Promise.resolve(v * 2)) // 返回 thenable → 等它落定并采纳结果（4）
+  .then(() => { throw new Error('boom'); })  // 抛出 → 下一环变为拒绝
+  .then(v => console.log('跳过', v)) // 被跳过
+  .catch(err => `已恢复：${err.message}`)    // 返回值让链回到兑现
+  .then(v => console.log(v));        // '已恢复：boom'
+```
+
+需要牢记的推论：
+
+- **`catch` 会"吞掉"错误**。它的返回值使链恢复为兑现状态。想让错误继续传播必须在 `catch` 里重新 `throw`。
+- **`catch(fn)` 就是 `then(undefined, fn)`**。因此 `p.then(onOk, onErr)` 与 `p.then(onOk).catch(onErr)` 不等价：前者的 `onErr` 捕获不到 `onOk` 自己抛出的异常。
+- **`finally` 不接收值也不改变结果**，只用于清理（关闭 loading、释放锁）。但如果它返回一个 Promise，链会等待它；如果它抛出异常，会覆盖原本的结果。
+- **返回 thenable 会被"采纳"**，这也意味着无法直接兑现一个 Promise 对象本身；要传递 Promise 必须包一层，例如 `{ promise }`。
+
+### 组合器的取舍
+
+```js
+// 全成功语义：任一失败立即失败
+const [user, orders] = await Promise.all([fetchUser(id), fetchOrders(id)]);
+
+// 需要全部结果，失败也要知道
+const results = await Promise.allSettled(ids.map(fetchOne));
+const ok = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+const failed = results.filter(r => r.status === 'rejected').map(r => r.reason);
+
+// 超时：第一个落定者胜出
+const data = await Promise.race([
+  fetch(url),
+  new Promise((_, reject) => setTimeout(() => reject(new Error('超时')), 5000)),
+]);
+
+// 多个镜像源，取第一个成功的
+const config = await Promise.any(mirrors.map(m => fetch(m).then(r => r.json())));
+```
+
+两个关键细节：
+
+1. **`Promise.all` 的"快速失败"不会取消其它任务**。所有请求都已经发出，只是结果被忽略。真正要停止工作必须用 `AbortController`，见[请求取消与竞态](/topics/abort-race)。
+2. **`Promise.all` 的顺序是输入顺序**，不是完成顺序；返回数组可以安全解构。
+
+传入 `Promise.all` 的可迭代对象里的每一项，都是**在传入前就已经开始执行**的——因为 `fetchUser(id)` 在构造数组时就调用了。这解释了为什么 `Promise.all` 是"并发等待"而不是"并发启动"。
+
+### 并发控制
+
+`Promise.all` 对一百个请求会一次性全发出去，容易打爆浏览器的连接数或服务端限流。需要限并发时用一个简单的池：
+
+```js
+async function mapWithConcurrency(items, limit, task) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await task(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+```
+
+### 未处理的拒绝
+
+一个被拒绝但没有任何拒绝处理器的 Promise 会触发 `unhandledrejection` 事件（Node 里默认会终止进程）。生产环境应当接上：
+
+```js
+window.addEventListener('unhandledrejection', event => {
+  report(event.reason);
+  event.preventDefault();   // 阻止控制台默认报错，视监控策略决定是否保留
+});
+```
+
+注意"稍后再加 `catch`"也会先触发一次该事件再被撤销（`rejectionhandled`），所以链要在创建时就接好处理器。监控实践见[前端错误监控与稳定性](/topics/error-monitoring)。
+
+## 项目应用
+
+1. 独立的请求一律用 `Promise.all` 并发，不要写成串行 `await`；有依赖关系的才串行。
+2. 批量操作（批量上传、批量校验）用 `allSettled`，把成功与失败分开呈现，而不是一个失败全盘皆输。
+3. 超时统一用 `race` 加 `AbortController` 组合：`race` 让调用方及时返回，`abort` 真正停止底层请求。
+4. 请求数超过十几个时用并发池限流，避免连接排队反而更慢。
+5. 每条链的末端必须有 `catch` 或由 `await` 的 `try/catch` 覆盖；把 `unhandledrejection` 接到监控上作为兜底。
+6. 不要把 Promise 当作可重放的任务：它在创建时就开始执行且只落定一次。需要"重试"就重新调用产生 Promise 的函数，需要"懒执行"就传函数而不是 Promise。
+
+## 边界与反例
+
+"`Promise.race` 可以取消慢请求"是错的，它只是不再等待，底层请求仍在跑、仍会消耗带宽、仍可能触发副作用。
+
+"`Promise.all` 比 `for await` 快"要看场景：并发确实更快，但如果每项之间有依赖，或者服务端有严格的速率限制，串行或限流反而更稳。
+
+"`new Promise` 里可以用 `async` 回调"是常见反模式：`async` 回调抛出的异常不会到达外层 Promise，会变成未处理的拒绝。需要包装回调式 API 时，`new Promise` 的执行器应保持同步。
+
+`Promise.resolve(x)` 在 `x` 已经是 Promise 时**原样返回**同一个对象，不会包一层；但 `new Promise(r => r(x))` 会创建新对象。
+
+最后，Promise 的回调都在微任务里执行，一条很长的同步链会在当前宏任务结束前一次性跑完，可能推迟渲染；把重计算放进 `setTimeout` 或 `scheduler.yield` 之类的让步点更合适。
+
+## 面试回答
+
+Promise 是一个一次性状态机：从 `pending` 出发，只能转到 `fulfilled` 或 `rejected` 一次，之后不可更改，所以它从结构上解决了回调可能被调用多次或不被调用的问题，并且注册时机不影响结果。
+
+`then` 的关键是它总是返回一个**新的** Promise，回调的返回值决定下一环状态：返回普通值就以该值兑现，返回 thenable 就等待并采纳它的结果，抛出异常就变成拒绝。`catch` 只是 `then(undefined, onRejected)` 的简写，它的返回值会让链恢复为兑现——要继续传播必须重新抛出。错误沿链向后找最近的拒绝处理器，中间的成功回调被跳过。
+
+组合器方面：`all` 是全成功语义，任一失败立即失败但**不会取消**其余请求；`allSettled` 永不拒绝，适合批量场景；`race` 由第一个落定者决定，常用于超时；`any` 取第一个成功者，全失败时抛 `AggregateError`。最后，Promise 回调都在微任务里执行，链会在当前宏任务结束前跑完，这决定了它与 `setTimeout` 的先后顺序。
+
+## 深度追问
+
+1. **`then` 回调返回 Promise 时会怎样？** 当前环的 Promise 会"采纳"这个 thenable：等它落定，然后以相同的状态和值落定自己。这多花一个微任务周期，所以嵌套 Promise 的解析顺序会比返回普通值晚一拍。
+2. **`Promise.all` 中一项失败后其它请求会停吗？** 不会。所有 Promise 在传入前就已开始执行，`all` 只是不再等待它们的结果。要真正终止必须用 `AbortController` 主动取消，否则副作用照常发生。
+3. **未处理的拒绝会怎样？** 浏览器触发 `unhandledrejection` 事件并在控制台报错，Node 默认终止进程。生产中应监听该事件上报，并保证每条链在创建时就接上处理器——事后补 `catch` 会先触发一次该事件。
+
+## 关联专题
+
+- [事件循环与任务队列](/topics/event-loop)：微任务调度决定 Promise 回调的执行时机。
+- [async/await 与错误处理](/topics/async-await-errors)：同样的语义换一套语法后的取舍。
+- [请求取消与竞态](/topics/abort-race)：组合器解决不了的取消问题。
+- [手写 Promise](/topics/handwritten-promise)：把这些规则真正实现一遍。
+
+## 资料来源
+
+- [MDN — Using promises](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Using_promises)
+- [ECMAScript — Promise Objects](https://tc39.es/ecma262/#sec-promise-objects)

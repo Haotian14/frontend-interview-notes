@@ -1,0 +1,141 @@
+# 响应式图片与媒体加载
+
+## 一句话结论
+
+`srcset` 交给浏览器做分辨率选择，`picture` 用于开发者必须亲自决定的艺术方向与格式回退；两者都必须配合正确的 `sizes` 与尺寸占位，否则要么下载错档位，要么制造布局偏移。
+
+## 前置知识
+
+请先阅读[语义化 HTML 与可访问性](/topics/semantic-accessibility)，理解替代文本与角色的关系。本文默认读者知道设备像素比（DPR）的含义，以及 CSS 像素与物理像素的区别。
+
+## 核心机制
+
+### 两类不同的问题
+
+- **分辨率切换**：同一张图，只是需要不同像素尺寸。决定权应当交给浏览器，因为它同时知道视口宽度、DPR、缩放比例，甚至可以参考用户设置与网络状况。
+- **艺术方向**：不同断点要展示不同的裁剪、不同的主体位置，或者要按格式支持情况回退。这类判断浏览器无从得知，必须由开发者显式表达。
+
+前者用 `img` 的 `srcset` + `sizes`，后者用 `picture` + `source`。把两者混用会失去浏览器的优化空间。
+
+### srcset 与 sizes 的配合
+
+```html
+<img
+  src="/media/cover-800.jpg"
+  srcset="/media/cover-400.jpg 400w,
+          /media/cover-800.jpg 800w,
+          /media/cover-1600.jpg 1600w"
+  sizes="(min-width: 1120px) 720px, (min-width: 780px) 60vw, 100vw"
+  width="1600"
+  height="900"
+  alt="季度营收趋势折线图，四个季度持续上升"
+/>
+```
+
+`w` 描述符声明的是**候选图本身的像素宽度**，不是断点。浏览器的计算大致是：先按 `sizes` 的媒体条件求出图片将占据的 CSS 像素宽度，再乘以设备像素比得到需要的物理像素，最后从候选里挑一个不小于它的最省流量的。
+
+关键在于 `sizes` 是一个**承诺**：预加载扫描器在 CSS 尚未生效、布局尚未发生时就要开始请求图片，此刻浏览器无法测量元素实际宽度，只能相信这个值。所以 `sizes` 必须和最终 CSS 的结果一致，容器宽度改了要一起改。写死 `sizes="100vw"` 而实际只占一半，会稳定地多下载一档。
+
+`x` 描述符是简化版，只按 DPR 选择，适合尺寸固定的图片，例如 logo：
+
+```html
+<img src="/logo.png" srcset="/logo.png 1x, /logo@2x.png 2x" width="120" height="32" alt="站点标志" />
+```
+
+用了 `x` 描述符就不要再写 `sizes`，两者语义不兼容。
+
+### picture 用于必须由你决定的事
+
+```html
+<picture>
+  <source type="image/avif" srcset="/media/hero.avif" />
+  <source type="image/webp" srcset="/media/hero.webp" />
+  <source media="(max-width: 600px)" srcset="/media/hero-portrait.jpg" />
+  <img src="/media/hero.jpg" width="1600" height="900" alt="团队在白板前讨论季度目标" />
+</picture>
+```
+
+`source` 按书写顺序匹配，**第一条命中的直接生效**，后面的不再考虑，所以格式要按"最优先在前"排列。`img` 是必需的：它承载 `alt`、尺寸和最终渲染，也是不支持任何 `source` 时的回退。样式和事件都作用在 `img` 上，不要试图给 `source` 加 class。
+
+### 加载时机
+
+- `loading="lazy"` 让视口外的图片延后请求。**绝不要加在首屏主图上**：它会让 LCP 元素排在更后面开始下载。
+- `fetchpriority="high"` 提升 LCP 图片的优先级，`low` 用于轮播里非当前帧这类次要资源。
+- `decoding="async"` 允许图片解码不阻塞主线程渲染，长列表里有帮助。
+- 真正关键的首屏图可以用 `<link rel="preload" as="image" imagesrcset=... imagesizes=...>`，但预加载是稀缺资源，滥用会挤占其它请求。
+
+### 尺寸占位与布局偏移
+
+图片在到达前高度为零，到达后突然撑开，会把下方内容推走，这是累积布局偏移（CLS）最常见的来源。解决办法是让浏览器提前知道宽高比：
+
+```html
+<img src="/media/cover-800.jpg" width="1600" height="900" alt="…" />
+```
+
+```css
+img {
+  height: auto;
+  max-width: 100%;
+}
+```
+
+现代浏览器会用 `width`/`height` 属性算出 `aspect-ratio` 并预留空间，`height: auto` 让实际显示仍然自适应。容器裁剪时改用 CSS：
+
+```css
+.card__cover {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+```
+
+### 替代文本按用途写
+
+`alt` 描述的是**图片在这个位置承担的功能**，不是图片内容的客观转述：
+
+- 传递信息的图：写出信息本身，例如"季度营收持续上升"，而不是"折线图"。
+- 纯装饰的图：写 `alt=""`，让辅助技术跳过；缺少 `alt` 属性时部分屏幕阅读器会念文件名，这比空值更糟。
+- 作为链接或按钮唯一内容的图：`alt` 要写目的地或动作，例如"返回首页"。
+- 复杂图表：`alt` 给结论，详细数据用相邻的表格或 `figcaption` 承载。
+
+## 项目应用
+
+1. 先确定这张图属于分辨率切换还是艺术方向，再选 `srcset` 或 `picture`，不要默认全部上 `picture`。
+2. 候选档位按实际布局宽度和常见 DPR 生成，通常三到四档就够，档位太密只增加构建与缓存成本。
+3. `sizes` 从 CSS 反推，并在改布局时同步修改；把它当作和媒体查询一样的布局代码来维护。
+4. 首屏 LCP 图：不 lazy、`fetchpriority="high"`、必要时 preload；其余图片一律 `loading="lazy"`。
+5. 所有图片写 `width`/`height` 或在 CSS 里给 `aspect-ratio`，用 DevTools 的 Performance 面板或 Web Vitals 观测 CLS 是否归零。
+6. 视频同理：`poster` 提供首帧，`preload="metadata"` 避免自动拉全片，自动播放必须静音并提供暂停控制。
+
+## 边界与反例
+
+"`srcset` 会自动选最合适的图"只有在 `sizes` 正确时成立。浏览器一旦按某个候选发起请求，通常不会因为后续布局变化而换图，所以事后修 CSS 不会纠正已经下载的档位。
+
+`loading="lazy"` 对所有图片一把梭会拖慢首屏：浏览器需要先完成布局才能判断哪些在视口外，主图因此延后。反过来，给每张图都 `fetchpriority="high"` 等于没有优先级。
+
+`picture` 里的 `source` 只是候选来源，媒体查询顺序错了会一直命中第一条；同时它不做"渐进增强"的合并，命中即终止。
+
+`width`/`height` 属性不是"固定死尺寸"，它们只是提供宽高比；忘记写 `height: auto` 才会真的把图片压变形。
+
+图片格式方面，AVIF/WebP 通常更小，但编码成本更高，且极小的图标用 SVG 或内联更划算。度量口径与目标见 [Core Web Vitals 与性能测量](/topics/web-vitals)。
+
+## 面试回答
+
+响应式图片要先分清两个问题。同一张图只是尺寸不同，属于分辨率切换，用 `img` 的 `srcset` 加 `w` 描述符配合 `sizes`，把选择权交给浏览器，它同时知道视口、DPR 和用户设置；如果要按断点换裁剪或按支持情况换格式，那是艺术方向，必须用 `picture` 加 `source` 显式决定。
+
+`sizes` 是关键也是最容易写错的地方：预加载扫描器在布局发生前就要请求图片，此时浏览器无法测量元素宽度，只能相信 `sizes` 这个承诺，所以它必须和 CSS 结果保持一致。时机上，首屏 LCP 图不加 `lazy`，可以用 `fetchpriority="high"` 甚至 preload，视口外的图片才 lazy。每张图都要用 `width`/`height` 或 `aspect-ratio` 留出空间，否则就是 CLS 的主要来源。`alt` 按用途写，装饰图用空 `alt` 让辅助技术跳过。
+
+## 深度追问
+
+1. **w 和 x 描述符分别用在哪？** `w` 描述候选图自身宽度，配合 `sizes` 让浏览器按布局与 DPR 综合选择，适合尺寸随布局变化的图；`x` 只按 DPR 选择，适合 logo、图标这类布局尺寸固定的图，此时不写 `sizes`。
+2. **为什么浏览器不能自己测量宽度？** 因为预加载扫描器在 HTML 解析阶段就发起图片请求，那时 CSS 可能还没下载、布局也没发生。等到布局完成再选图会显著推迟 LCP，所以规范选择让开发者用 `sizes` 提前声明。
+3. **什么时候必须用 picture？** 需要按断点换裁剪或主体位置、需要按格式支持回退（AVIF → WebP → JPEG）、需要按 `prefers-color-scheme` 换图时。只是尺寸不同就不该用它，那会剥夺浏览器的选择空间。
+
+## 关联专题
+
+- [语义化 HTML 与可访问性](/topics/semantic-accessibility)：`alt` 的写法本质上是可访问名称的一部分。
+- [Core Web Vitals 与性能测量](/topics/web-vitals)：LCP 与 CLS 的定义决定了这里的加载与占位策略。
+
+## 资料来源
+
+- [MDN — Responsive images](https://developer.mozilla.org/en-US/docs/Web/HTML/Guides/Responsive_images)
+- [HTML Standard — Images](https://html.spec.whatwg.org/multipage/images.html)

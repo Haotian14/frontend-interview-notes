@@ -2,14 +2,32 @@ import { createElement, lazy, Suspense } from 'react';
 import { MDXProvider } from '@mdx-js/react';
 import { useParams } from 'react-router-dom';
 import TopicLayout from '../../components/content/TopicLayout';
-import { getTopic, loadTopic, topics } from '../../content/registry';
+import { getTopic, loadPractice, loadTopic, topics } from '../../content/registry';
 import { mdxComponents } from '../../mdx-components';
 
-const articleComponents = new Map(topics.map(topic => [
+/**
+ * 正文和面试答案都按专题分片：两者一起加载，落在同一个 Suspense 边界里，
+ * 因此读者只会下载自己正在读的这一篇，而不是全部专题的长文本。
+ */
+const readerComponents = new Map(topics.map(topic => [
   topic.slug,
   lazy(async () => {
     try {
-      return await loadTopic(topic.slug);
+      const [module, practice] = await Promise.all([
+        loadTopic(topic.slug),
+        loadPractice(topic.slug),
+      ]);
+      const Article = module.default;
+
+      return {
+        default: () => (
+          <TopicLayout topic={topic} conclusion={practice.interview.answer}>
+            <MDXProvider components={mdxComponents}>
+              <Article />
+            </MDXProvider>
+          </TopicLayout>
+        ),
+      };
     } catch (error) {
       throw new Error(`无法加载专题「${topic.title}」`, { cause: error });
     }
@@ -19,9 +37,9 @@ const articleComponents = new Map(topics.map(topic => [
 export default function TopicPage() {
   const { chapter, topic: topicSlug } = useParams();
   const topic = topicSlug ? getTopic(topicSlug) : undefined;
-  const hasArticle = topic ? articleComponents.has(topic.slug) : false;
+  const Reader = topic ? readerComponents.get(topic.slug) : undefined;
 
-  if (!topic || topic.chapter !== chapter || !hasArticle) {
+  if (!topic || topic.chapter !== chapter || !Reader) {
     throw new Response('Unknown handbook topic', {
       status: 404,
       statusText: 'Not Found',
@@ -36,11 +54,7 @@ export default function TopicPage() {
         </div>
       )}
     >
-      <TopicLayout topic={topic}>
-        <MDXProvider components={mdxComponents}>
-          {createElement(articleComponents.get(topic.slug)!)}
-        </MDXProvider>
-      </TopicLayout>
+      {createElement(Reader)}
     </Suspense>
   );
 }

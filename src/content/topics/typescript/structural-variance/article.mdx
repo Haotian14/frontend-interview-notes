@@ -1,0 +1,176 @@
+# 结构化类型与型变
+
+## 一句话结论
+
+TypeScript 只看形状不看声明来源；在此基础上，属性与返回值协变、函数参数逆变、方法简写双变，而数组的协变是一个已知不安全的实用妥协。
+
+## 前置知识
+
+请先阅读[泛型与约束](/topics/generics-constraints)，理解 `extends` 表示的是"可赋值给"。本文回答的是更底层的问题：**什么情况下 A 可以赋值给 B**。
+
+## 核心机制
+
+### 结构化：只看形状
+
+```ts
+interface Point { x: number; y: number }
+class Vector { constructor(public x: number, public y: number) {} }
+
+const p: Point = new Vector(1, 2);   // 合法：形状匹配即可
+```
+
+Java、C# 那样的**名义类型**要求显式声明实现关系；TypeScript 是结构化的，只要成员齐全且类型兼容就兼容。这让它能给现有 JavaScript 库写类型声明，也意味着两个语义完全不同但形状相同的类型可以互相赋值：
+
+```ts
+type UserId = { value: string };
+type OrderId = { value: string };
+const userId: UserId = { value: 'u1' };
+const orderId: OrderId = userId;     // 合法，但语义上是 bug
+```
+
+需要名义语义时用**品牌类型**模拟：
+
+```ts
+declare const brand: unique symbol;
+type Brand<T, B extends string> = T & { readonly [brand]: B };
+
+type UserId = Brand<string, 'UserId'>;
+type OrderId = Brand<string, 'OrderId'>;
+
+const asUserId = (raw: string) => raw as UserId;
+
+function loadUser(id: UserId) { /* ... */ }
+loadUser(asUserId('u1'));            // 正确
+loadUser('u1');                      // 报错：缺少品牌
+```
+
+### 多余属性检查
+
+```ts
+interface Options { url: string; retries?: number }
+
+// 报错：'timeout' 不在 Options 中
+const a: Options = { url: '/api', timeout: 1000 };
+
+// 不报错：先赋给变量后失去"新鲜度"
+const raw = { url: '/api', timeout: 1000 };
+const b: Options = raw;
+```
+
+这不是矛盾。**赋值兼容规则**只要求源类型至少具备目标类型的成员，所以 `b` 合法；**多余属性检查**是额外加的一层启发式保护，只作用于直接书写的对象字面量，专门用来抓拼写错误（比如把 `retries` 写成 `retry`）。
+
+理解这条能解释大量"为什么这里报错那里不报错"的困惑。要保留这层保护，就把字面量直接写在赋值或调用处，不要绕道中间变量。
+
+### 型变：谁能替换谁
+
+型变描述的是"当 `Dog` 是 `Animal` 的子类型时，`F<Dog>` 与 `F<Animal>` 的关系"。
+
+**属性与返回值：协变。**
+
+```ts
+type Animal = { name: string };
+type Dog = { name: string; breed: string };
+
+const dogs: Dog[] = [{ name: 'Rex', breed: 'shiba' }];
+const animals: Animal[] = dogs;                 // 协变，允许
+
+type GetAnimal = () => Animal;
+const getDog: GetAnimal = (): Dog => ({ name: 'Rex', breed: 'shiba' });  // 返回更具体，安全
+```
+
+返回值协变是安全的：调用方期望拿到 `Animal`，实际拿到 `Dog`，`Dog` 满足所有 `Animal` 的要求。
+
+**函数参数：逆变。**
+
+```ts
+type HandleDog = (d: Dog) => void;
+
+const handleAnimal = (a: Animal) => console.log(a.name);
+const h: HandleDog = handleAnimal;   // 允许：能处理任意 Animal 的函数当然能处理 Dog
+
+const handleDog = (d: Dog) => console.log(d.breed);
+const g: (a: Animal) => void = handleDog;  // strictFunctionTypes 下报错
+```
+
+第二行如果允许，调用方就可以传一只没有 `breed` 的 `Animal` 进来，运行时读到 `undefined`。所以**参数越宽的函数越"通用"，才是子类型**。这个检查由 `strictFunctionTypes` 开启（包含在 `strict` 里）。
+
+**方法简写：双变。**
+
+```ts
+interface A { handle(x: Dog): void }        // 方法语法 → 双变，不检查
+interface B { handle: (x: Dog) => void }    // 属性语法 → 逆变，严格检查
+```
+
+`strictFunctionTypes` **不作用于方法简写语法**。这是一个刻意保留的不安全妥协：数组的 `push`、`forEach` 等内置方法如果按逆变严格检查，大量现有代码会报错。写自己的接口时，需要严格检查就用属性 + 箭头函数语法。
+
+### 数组协变的不安全性
+
+```ts
+const dogs: Dog[] = [{ name: 'Rex', breed: 'shiba' }];
+const animals: Animal[] = dogs;      // 允许
+animals.push({ name: 'Kitty' });     // 编译通过
+dogs[1].breed;                       // 运行时 undefined
+```
+
+可变容器的协变在理论上是不安全的（Java 的数组也有同样问题）。TypeScript 选择允许它，因为绝大多数代码只读不写。规避方式是**用只读类型表达只读意图**：
+
+```ts
+function totalLength(items: readonly Animal[]): number {
+  // items.push(...)  ← 编译期就被禁止
+  return items.length;
+}
+```
+
+函数参数尽量声明 `readonly T[]` 或 `ReadonlyArray<T>`，既表达契约又避免这个坑。
+
+### unknown、any、never 的位置
+
+- `unknown` 是**顶类型**：一切可赋值给它，它不能赋值给别的（除了 `any`），必须先收窄。
+- `any` 关闭检查，双向兼容，会像病毒一样扩散——它是类型系统里唯一真正危险的东西。
+- `never` 是**底类型**：可赋值给一切，没有值属于它。它是穷尽检查的基础，见[类型收窄与穷尽检查](/topics/type-narrowing)。
+
+## 项目应用
+
+1. 领域标识（用户 ID、订单号、金额单位）用品牌类型区分，避免结构相同导致的误传。
+2. 函数入参用 `readonly` 修饰数组和对象，既表达不修改的契约，也绕开可变容器协变的不安全。
+3. 回调类型用属性 + 箭头函数语法声明，让 `strictFunctionTypes` 生效；只有需要兼容内置双变行为时才用方法简写。
+4. 想让多余属性检查生效，就把配置对象**直接**写在调用处；需要复用配置时，给变量显式标注目标类型而不是靠推断。
+5. `tsconfig` 开 `strict`，并额外考虑 `noUncheckedIndexedAccess`（索引访问带上 `undefined`）和 `exactOptionalPropertyTypes`（区分"没有这个键"和"值是 undefined"）。
+6. 禁止 `any`，用 `unknown` + 收窄替代；`as` 断言集中在边界层并配运行时校验。
+
+## 边界与反例
+
+"结构化类型不安全"过于笼统。它的取舍是明确的：换来与 JavaScript 生态的无缝互操作，代价是丢失名义语义——而后者可以用品牌类型补回来。
+
+"加了 `strict` 就没有不安全的地方"不成立。类型断言、`any`、数组协变、方法双变、索引签名、以及所有外部数据入口都是漏洞。类型系统的目标是**降低错误率**，不是形式化证明。
+
+多余属性检查不适用于展开运算符：`const c: Options = { ...raw }` 不报错，因为展开结果被视为已有对象的复制。
+
+`interface` 与 `type` 在兼容性上基本等价，主要差别是 `interface` 可声明合并、错误信息更友好，而 `type` 能表达联合、条件类型和映射类型。团队里选一个作为默认即可，不必争论。
+
+最后，类型只存在于编译期。两个结构相同的类型在运行时毫无差别，品牌类型也只是编译期的标记；跨越边界时仍然需要运行时校验。
+
+## 面试回答
+
+TypeScript 的类型兼容是**结构化**的：只看形状不看声明来源，属性齐全且类型兼容就能赋值。这让它能给现有 JavaScript 库写声明，代价是丢失名义语义，需要区分用户 ID 和订单 ID 这类同形状类型时，可以用带 `unique symbol` 的品牌类型模拟。
+
+由此带来两个高频问题。第一是**多余属性检查**：直接写对象字面量赋值时多出的属性会报错，先存进变量再赋值就不报错——因为它只作用于"新鲜"的字面量，是一层抓拼写错误的启发式保护，不是赋值规则本身。
+
+第二是**型变**。对象属性和函数返回值协变，子类型可以替换父类型；函数参数在 `strictFunctionTypes` 下逆变，接受更宽参数的函数才是子类型，否则调用方可能传入缺少字段的值；但方法简写语法始终双变，这是为兼容数组等内置 API 保留的不安全妥协。数组本身也被当作协变处理，把 `Dog[]` 赋给 `Animal[]` 后往里写入就会破坏类型，实践中用 `readonly T[]` 规避。
+
+## 深度追问
+
+1. **为什么字面量直接赋值报错、先赋给变量不报错？** 赋值兼容只要求源类型具备目标类型的所有成员，多出来的属性不违反这条规则。多余属性检查是额外的一层保护，只针对直接书写的对象字面量，目的是抓拼写错误；变量已经"不新鲜"，因此不触发。
+2. **参数为什么逆变，方法为什么双变？** 逆变保证替换后的函数能处理调用方可能传入的所有值：参数更宽才更通用。方法简写保留双变是历史与实用的妥协——数组的 `push`、`sort` 等在严格逆变下会让大量现有代码报错，所以 `strictFunctionTypes` 刻意不作用于方法语法。
+3. **数组协变为什么不安全？** 因为数组可写。把 `Dog[]` 当作 `Animal[]` 后 `push` 一个普通 `Animal`，原数组就含有了不满足 `Dog` 的元素，读取时崩溃。规避办法是把只读用途的参数声明成 `readonly T[]`，此时不存在写入，协变就是安全的。
+
+## 关联专题
+
+- [泛型与约束](/topics/generics-constraints)：`extends` 判定用的正是这套赋值兼容规则。
+- [条件类型与映射类型](/topics/conditional-mapped-types)：条件类型的分支判断同样基于兼容性。
+- [类型收窄与穷尽检查](/topics/type-narrowing)：`never` 作为底类型的实际用途。
+
+## 资料来源
+
+- [TypeScript Handbook — Type Compatibility](https://www.typescriptlang.org/docs/handbook/type-compatibility.html)
+- [TypeScript — strictFunctionTypes](https://www.typescriptlang.org/tsconfig/#strictFunctionTypes)

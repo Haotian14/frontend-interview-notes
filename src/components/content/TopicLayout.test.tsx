@@ -44,7 +44,7 @@ describe('TopicLayout', () => {
 
     render(
       <MemoryRouter>
-        <TopicLayout topic={topic}>
+        <TopicLayout topic={topic} conclusion="这是一句话结论。">
           <h2 id="core-mechanism">核心机制</h2>
           <p>这是 MDX 正文验证。</p>
         </TopicLayout>
@@ -54,7 +54,7 @@ describe('TopicLayout', () => {
     expect(screen.getByRole('heading', { level: 1, name: topic.title })).toBeInTheDocument();
     expect(screen.getByText(`${topic.level} · ${topic.minutes} 分钟`)).toBeInTheDocument();
     expect(screen.getByText('这是 MDX 正文验证。')).toBeInTheDocument();
-    expect(screen.getByText(topic.interview.answer)).toBeInTheDocument();
+    expect(screen.getByText('这是一句话结论。')).toBeInTheDocument();
   });
 
   test('uses real URLs for related and adjacent topics', () => {
@@ -65,7 +65,7 @@ describe('TopicLayout', () => {
 
     render(
       <MemoryRouter>
-        <TopicLayout topic={topic}>
+        <TopicLayout topic={topic} conclusion="这是一句话结论。">
           <h2 id="mechanism">核心机制</h2>
         </TopicLayout>
       </MemoryRouter>,
@@ -89,7 +89,7 @@ describe('TopicLayout', () => {
 
     render(
       <MemoryRouter>
-        <TopicLayout topic={topic}>
+        <TopicLayout topic={topic} conclusion="这是一句话结论。">
           <h2 id="core-mechanism">核心机制</h2>
           <h3 id="render-timing">渲染时机</h3>
         </TopicLayout>

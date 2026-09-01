@@ -15,9 +15,12 @@ describe('content registry', () => {
     expect(ranks).toEqual(sorted);
   });
 
-  test('registers the event loop topic', () => {
+  test('registers the event loop topic inside its chapter', () => {
     expect(getTopic('event-loop')?.title).toBe('事件循环与任务队列');
-    expect(getChapterTopics('javascript-async')).toHaveLength(1);
+
+    const chapterTopics = getChapterTopics('javascript-async');
+    expect(chapterTopics.map(topic => topic.slug)).toContain('event-loop');
+    expect(chapterTopics.every(topic => topic.chapter === 'javascript-async')).toBe(true);
   });
 
   test('loads the MDX module lazily', async () => {

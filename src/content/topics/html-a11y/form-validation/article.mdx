@@ -1,0 +1,150 @@
+# 表单控件与原生校验
+
+## 一句话结论
+
+原生表单已经提供了语义、键盘行为和一套完整的约束校验状态机；正确的做法是保留它作为状态来源，只替换提示 UI，并把错误消息通过 `aria-describedby` 和 `aria-invalid` 暴露给辅助技术。
+
+## 前置知识
+
+请先阅读[语义化 HTML 与可访问性](/topics/semantic-accessibility)，理解可访问名称、角色和焦点顺序是怎么来的。本文默认读者知道 `form` 提交会带上有 `name` 的控件值，也知道 `label` 与控件的关联方式，因此讨论重点放在约束校验 API 和错误提示的可访问性上。
+
+## 核心机制
+
+### 表单语义先于校验
+
+一个能被正确校验的表单，前提是控件本身语义正确：
+
+- 每个控件都要有可访问名称。首选 `label for` 显式关联，其次把控件包在 `label` 内部；只写 `placeholder` 不算名称，因为它在输入后消失。
+- 相关控件用 `fieldset` + `legend` 分组，单选按钮组尤其需要，否则屏幕阅读器只会逐个读出选项而听不到问题本身。
+- `autocomplete` 用规范定义的令牌（`email`、`new-password`、`one-time-code` 等），这是浏览器和密码管理器识别字段的唯一可靠信号。
+- `inputmode` 决定移动端弹出的软键盘，`type` 决定语义与校验；两者独立，例如验证码常写成 `type="text" inputmode="numeric"`，避免 `type="number"` 的步进器和前导零丢失问题。
+
+### 约束校验的状态机
+
+浏览器为每个可校验控件维护一个 `ValidityState` 对象。声明式约束写在 HTML 上：
+
+```html
+<form id="signup" novalidate>
+  <label for="email">邮箱</label>
+  <input id="email" name="email" type="email" required autocomplete="email"
+         aria-describedby="email-error" />
+  <p id="email-error" class="field-error" role="alert" hidden></p>
+
+  <label for="age">年龄</label>
+  <input id="age" name="age" type="number" min="18" max="120" step="1" />
+
+  <button type="submit">注册</button>
+</form>
+```
+
+读写这些状态的 API 只有几个：
+
+- `input.validity` 返回标志位对象，`valid` 为总结果。
+- `input.validationMessage` 是浏览器生成的本地化消息。
+- `input.checkValidity()` 只返回布尔值，非法时派发 `invalid` 事件，不显示任何 UI。
+- `form.reportValidity()` 在 `checkValidity()` 的基础上显示原生气泡并聚焦第一个非法控件。
+- `input.setCustomValidity(message)` 写入非空字符串会让控件立刻非法（`customError` 为真），写入空字符串才是清除。
+
+`novalidate` 只关闭"提交时自动校验并弹气泡"，不会关闭状态计算，所以自定义 UI 通常这样组合：
+
+```js
+const form = document.querySelector('#signup');
+
+const messages = {
+  valueMissing: '这一项必须填写',
+  typeMismatch: '请填写有效的邮箱地址',
+  rangeUnderflow: '年龄需要不小于 18',
+};
+
+function describe(field) {
+  for (const key of Object.keys(messages)) {
+    if (field.validity[key]) return messages[key];
+  }
+  return field.validity.valid ? '' : field.validationMessage;
+}
+
+function paint(field) {
+  const error = document.getElementById(`${field.id}-error`);
+  const message = describe(field);
+  field.setAttribute('aria-invalid', message ? 'true' : 'false');
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+form.addEventListener('submit', event => {
+  const invalid = [...form.elements].filter(el => el.willValidate && !el.checkValidity());
+  invalid.forEach(paint);
+  if (invalid.length) {
+    event.preventDefault();
+    invalid[0].focus();
+  }
+});
+
+// 失焦后才校验，输入过程中只做「从错误恢复」的更新，避免边打字边报错。
+form.addEventListener('blur', event => paint(event.target), true);
+form.addEventListener('input', event => {
+  if (event.target.getAttribute('aria-invalid') === 'true') paint(event.target);
+});
+```
+
+### 错误提示怎么被读出来
+
+视觉上把消息放在控件下面还不够，屏幕阅读器需要显式关联：
+
+- `aria-describedby` 指向消息节点的 `id`，控件获得焦点时消息会被一并读出。
+- `aria-invalid="true"` 表明当前值非法，恢复合法时要改回 `false` 或移除。
+- 提交后集中展示的错误摘要用一个 `role="alert"` 或 `aria-live="assertive"` 区域，并把每条摘要做成跳转到对应控件的链接。
+- 不要只用红色边框表达错误，颜色不是所有人都能分辨；文本消息和图标要同时存在。
+
+### 跨字段与异步校验
+
+`ValidityState` 只描述单个控件，密码确认、日期区间这类跨字段规则需要自己算，再用 `setCustomValidity` 写回，让它们和原生约束共享同一套状态：
+
+```js
+function syncConfirm(password, confirm) {
+  confirm.setCustomValidity(confirm.value === password.value ? '' : '两次输入的密码不一致');
+}
+```
+
+用户名查重这类异步校验不能塞进 `submit` 的同步流程：先阻止默认提交，展示 pending 状态，请求返回后再决定 `setCustomValidity` 或真正提交。注意把请求做成可取消的，否则快速输入会让旧响应覆盖新结果。
+
+## 项目应用
+
+1. 先把 HTML 写对：`label`、`name`、`type`、`autocomplete`、`required` 一次到位，再考虑 JS。
+2. 表单加 `novalidate`，用自己的组件渲染消息，但状态一律读 `validity`，不要在 JS 里重写一套并行规则。
+3. 校验时机采用"失焦报错、输入恢复、提交兜底"，比每次按键都报错更少打断输入。
+4. 提交按钮不要用 `disabled` 锁住：用户会看不到自己错在哪。让它可点，点了给出完整错误列表并聚焦第一处。
+5. 提交中禁止重复提交，用 pending 状态 + `aria-busy`，成功后把焦点移到结果区域。
+6. 服务端返回的字段级错误按同一套渲染路径展示，前后端错误在视觉和可访问性上不应有两种表现。
+
+## 边界与反例
+
+`type="email"` 的内置规则相当宽松，`a@b` 就能通过，它保证的是语法而不是可投递性；真正确认邮箱只有发信一条路。`pattern` 在正则不匹配时才报错，但值为空时不触发，需要空值必填就得配合 `required`。
+
+`maxlength` 会直接阻止继续输入，因此靠它不会产生 `tooLong`；`tooLong` 只在值由脚本或历史数据设置时出现。`disabled` 控件不参与校验也不会被提交，需要只读又要提交时用 `readonly`。
+
+隐藏字段和 `display: none` 的控件仍会参与校验，浏览器无法聚焦它们时会在控制台报错并静默失败——多步表单里未展示的步骤要么真正从 DOM 中移除，要么临时移除约束。
+
+最后，客户端校验只是体验优化。请求可以被任意构造，服务端必须独立完成同样甚至更严格的校验，并对写入内容做转义与白名单处理，参见 [XSS 防御与内容安全策略](/topics/xss-defense)。
+
+## 面试回答
+
+原生表单先给我三样东西：语义、行为和校验。语义指 `label` 与控件的显式关联、`fieldset`/`legend` 的分组、`autocomplete` 和 `inputmode` 带来的自动填充与合适键盘；行为指回车提交、重置和按 `name` 收集值；校验指 `required`、`type`、`pattern`、`min`/`max`/`step` 汇总成的 `ValidityState`。
+
+我一般保留原生校验作为状态来源，用 `checkValidity()` 或 `validity` 读状态，用 `setCustomValidity` 写业务消息，只把提示 UI 换成自己的组件——原生气泡不能样式化、不能同时显示多条，移动端表现也不一致。渲染错误时把消息节点用 `aria-describedby` 关联到控件并设置 `aria-invalid`，提交失败时聚焦第一个非法控件。跨字段和异步规则统一用 `setCustomValidity` 写回，保持单一状态源。最后强调一句：客户端校验永远只是体验优化，服务端必须重复校验。
+
+## 深度追问
+
+1. **checkValidity、reportValidity 和 novalidate 的关系？** `checkValidity()` 只算状态并在非法时派发 `invalid` 事件；`reportValidity()` 在此基础上显示原生气泡并聚焦；`novalidate` 只关闭提交时的自动校验与气泡，不影响状态计算，所以自定义 UI 常用 `novalidate` + `checkValidity()`。
+2. **自定义提示怎么让屏幕阅读器读到？** 消息节点有稳定 `id`，控件用 `aria-describedby` 指向它，同时切换 `aria-invalid`；集中摘要用 `role="alert"` 并提供跳转链接。仅靠颜色或 `title` 都不可靠。
+3. **为什么服务端必须重复校验？** 客户端代码和请求都在用户可控范围内，禁用 JS、改 DOM、直接发请求都能绕过；客户端校验减少往返，服务端校验保证正确性和安全性。
+
+## 关联专题
+
+- [语义化 HTML 与可访问性](/topics/semantic-accessibility)：控件的名称、角色、状态是校验提示能被读出的前提。
+- [XSS 防御与内容安全策略](/topics/xss-defense)：表单是最主要的不可信输入入口，校验之外还要处理输出编码。
+
+## 资料来源
+
+- [MDN — Client-side form validation](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Form_validation)
+- [HTML Standard — Constraint validation](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constraints)

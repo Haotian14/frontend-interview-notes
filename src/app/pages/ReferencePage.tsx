@@ -1,23 +1,21 @@
+import { lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { topics } from '../../content/registry';
+import { getTopic, loadAllPractices } from '../../content/registry';
 import { topicPath } from '../paths';
 
-const referenceTopics = topics.filter(topic => topic.reference);
+// 速查表按需加载，理由同 /interview：它只服务这一个页面。
+const ReferenceTables = lazy(async () => {
+  const referenced = (await loadAllPractices())
+    .filter(practice => practice.reference)
+    .map(practice => ({ practice, topic: getTopic(practice.slug)! }));
 
-export default function ReferencePage() {
-  return (
-    <div className="reference-page">
-      <header>
-        <p>QUICK / REFERENCE</p>
-        <h1 tabIndex={-1}>前端速查表</h1>
-        <p>用于面试前快速唤醒概念；每一张表都来自包含机制、边界和证据的完整专题。</p>
-      </header>
-
+  return {
+    default: () => (
       <div className="reference-tables">
-        {referenceTopics.map(topic => (
-          <div className="table-scroll" key={topic.slug}>
+        {referenced.map(({ practice, topic }) => (
+          <div className="table-scroll" key={practice.slug}>
             <table>
-              <caption>{topic.reference!.caption}</caption>
+              <caption>{practice.reference!.caption}</caption>
               <thead>
                 <tr>
                   <th scope="col">概念</th>
@@ -25,7 +23,7 @@ export default function ReferencePage() {
                 </tr>
               </thead>
               <tbody>
-                {topic.reference!.rows.map(row => (
+                {practice.reference!.rows.map(row => (
                   <tr key={row.term}>
                     <th scope="row">{row.term}</th>
                     <td>{row.meaning}</td>
@@ -39,6 +37,22 @@ export default function ReferencePage() {
           </div>
         ))}
       </div>
+    ),
+  };
+});
+
+export default function ReferencePage() {
+  return (
+    <div className="reference-page">
+      <header>
+        <p>QUICK / REFERENCE</p>
+        <h1 tabIndex={-1}>前端速查表</h1>
+        <p>用于面试前快速唤醒概念；每一张表都来自包含机制、边界和证据的完整专题。</p>
+      </header>
+
+      <Suspense fallback={<p role="status">正在加载速查表…</p>}>
+        <ReferenceTables />
+      </Suspense>
     </div>
   );
 }

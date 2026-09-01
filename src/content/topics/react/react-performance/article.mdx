@@ -1,0 +1,168 @@
+# React 性能优化
+
+## 一句话结论
+
+先测量再优化；优先用结构调整（状态下移、内容提升）消除多余渲染，记忆化只是补充手段，而长列表虚拟化和并发特性解决的是另一类问题。
+
+## 前置知识
+
+请先阅读[协调算法与 key](/topics/reconciliation-keys)和[Hooks 规则与依赖数组](/topics/hooks-dependencies)。理解"复用还是重建"以及"依赖数组意味着什么"，是判断记忆化是否有效的前提。
+
+## 核心机制
+
+### 先测量
+
+React DevTools 的 Profiler 回答三个问题：哪一次提交耗时最长、这次提交里哪些组件渲染了、每个组件为什么渲染（打开 "Record why each component rendered"）。
+
+配合浏览器 Performance 面板看主线程：如果长任务集中在 Layout/Paint 而不是 Scripting，问题在 CSS 或 DOM 结构，加多少 `memo` 都没用。指标口径见[Core Web Vitals 与性能测量](/topics/web-vitals)。
+
+**重渲染本身不等于慢**。React 渲染一批纯 JavaScript 对象非常快，真正的成本在提交阶段的 DOM 操作、同步布局读取（`offsetHeight` 之类）、以及组件内部的昂贵计算。
+
+### 结构调整优先
+
+**状态下移**：把频繁变化的状态放进真正需要它的最小子树。
+
+```jsx
+// 反例：输入状态放在顶层，每次按键整棵树重渲染
+function Page() {
+  const [query, setQuery] = useState('');
+  return (
+    <>
+      <SearchInput value={query} onChange={setQuery} />
+      <ExpensiveDashboard />     {/* 无辜受牵连 */}
+    </>
+  );
+}
+
+// 正确：把状态和用到它的部分一起下移
+function SearchSection() {
+  const [query, setQuery] = useState('');
+  return <><SearchInput value={query} onChange={setQuery} /><Results query={query} /></>;
+}
+```
+
+**内容提升**：把不变的子树作为 `children` 传进来。
+
+```jsx
+function Layout({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={open ? 'open' : ''}>
+      <button onClick={() => setOpen(o => !o)}>切换</button>
+      {children}          {/* 元素在父层创建，引用不变，React 直接跳过 */}
+    </div>
+  );
+}
+
+<Layout><ExpensiveDashboard /></Layout>
+```
+
+`children` 里的元素是在**外层**创建的，`Layout` 重渲染时那个元素对象引用没变，协调阶段直接复用，不需要任何 `memo`。这是最被低估的优化。
+
+### 记忆化是一条链
+
+```jsx
+const Row = React.memo(function Row({ item, onSelect }) { /* ... */ });
+
+function List({ items }) {
+  // ❌ 每次渲染都是新引用，memo 立刻失效
+  return items.map(item => <Row key={item.id} item={item} onSelect={() => pick(item.id)} />);
+}
+
+function ListFixed({ items }) {
+  const handleSelect = useCallback(id => pick(id), []);
+  // Row 内部用 onSelect(item.id) 调用，避免为每行创建新函数
+  return items.map(item => <Row key={item.id} item={item} onSelect={handleSelect} />);
+}
+```
+
+三个 API 的分工：
+
+- `React.memo(Component)`：对 props 做**浅比较**，相同则跳过渲染。
+- `useMemo(fn, deps)`：缓存**计算结果**，用于昂贵计算或需要稳定引用的对象。
+- `useCallback(fn, deps)`：缓存**函数引用**，本质上是 `useMemo(() => fn, deps)`。
+
+链条上任何一环传了新建的对象、数组或内联函数，下游的 `memo` 就全部失效。这也是"到处加 memo"通常只增加成本的原因：每个 `useMemo` 都要保存依赖、每次渲染都要做比较，而收益为零。
+
+React Compiler 能自动完成大部分记忆化，启用后手写的 `memo`/`useCallback` 大多可以移除——但它不能替代结构调整和虚拟化。
+
+### 长列表虚拟化
+
+```jsx
+// 一万行 DOM 节点，任何记忆化都救不了
+{rows.map(row => <Row key={row.id} row={row} />)}
+```
+
+只渲染可视区域加少量缓冲（`@tanstack/react-virtual` 等库），DOM 节点数从上万降到几十，收益是数量级的。配合 `content-visibility: auto` 还能进一步降低浏览器的布局与绘制成本。
+
+### 并发特性
+
+```jsx
+const [isPending, startTransition] = useTransition();
+
+function handleChange(event) {
+  setQuery(event.target.value);            // 紧急：输入框必须立刻响应
+  startTransition(() => setFilter(event.target.value));  // 非紧急：可被打断
+}
+
+// 或者更简单地降级派生值
+const deferredQuery = useDeferredValue(query);
+const results = useMemo(() => filter(items, deferredQuery), [items, deferredQuery]);
+```
+
+`useTransition` 标记**由事件触发的**状态更新为低优先级；`useDeferredValue` 让某个**值**滞后于紧急更新。两者都不减少工作量，而是重新安排顺序，让输入、点击这类交互先得到响应——直接改善 INP 指标。
+
+`<Suspense>` 与流式 SSR 则从另一个方向解决问题：先展示骨架，数据到达再填充，缩短用户感知的等待。
+
+## 项目应用
+
+1. 建立基线：在 CI 里记录关键页面的包体积和 Lighthouse 分数，优化前后对比，避免"感觉快了"。
+2. 遇到卡顿先用 Profiler 定位，再从"能不能不渲染"（结构）、"能不能少渲染"（虚拟化）、"能不能晚点渲染"（并发）三个方向选择，最后才考虑记忆化。
+3. Context 的值一定要 `useMemo` 稳定，否则所有消费者每次都重渲染；更好的做法是按变化频率拆分多个 Context，见[状态归属与 Context 边界](/topics/state-architecture)。
+4. 表格、图表、编辑器这类重组件用 `React.memo` 包一层是划算的；小的展示组件不值得。
+5. 昂贵的纯计算（大数组排序、Markdown 解析、图片处理）搬到 Web Worker，不要占用主线程。
+6. 打开 React DevTools 的 "Highlight updates" 快速定位意外的重渲染范围。
+
+## 边界与反例
+
+"给所有组件加 `React.memo` 更安全"是错的。浅比较本身有成本，且大部分组件的 props 每次都在变，结果是净亏损。
+
+"`useMemo` 能保证引用稳定"不成立。React 明确保留在内存压力下丢弃缓存的权利，`useMemo` 是**性能提示而非语义保证**；依赖引用稳定的正确性逻辑必须用 `useRef` 或状态管理。
+
+"减少渲染次数就是优化"忽略了成本结构。一次渲染一万行比一百次渲染十行慢得多；应该盯的是**总工作量与长任务**，不是渲染计数。
+
+"`useTransition` 让代码更快"也不对，它只是重排优先级；如果计算本身要 2 秒，标记为 transition 只是让它不阻塞输入，结果依然 2 秒后才出现。
+
+内联函数和内联对象**不是原罪**。只有当下游做了记忆化比较时它们才有害；在没有 `memo` 的子组件上纠结内联函数是过早优化。
+
+最后，性能问题很多时候根本不在 React：过大的 bundle、阻塞渲染的字体、未压缩的图片、瀑布式请求，往往比重渲染影响大得多，见[代码分割与按需加载](/topics/code-splitting)。
+
+## 面试回答
+
+我的顺序是**先测量再优化**。用 React DevTools 的 Profiler 看哪一次提交耗时长、哪些组件渲染了以及为什么渲染，再决定手段。
+
+第一优先是**结构调整**而不是加 `memo`：把频繁变化的状态下移到真正用到它的子树；或者把不变的部分通过 `children` 作为 prop 传进来——元素在外层创建，引用不变，父组件重渲染时 React 直接跳过。
+
+第二才是**记忆化**。`React.memo` 做 props 浅比较，`useMemo` 缓存计算结果，`useCallback` 稳定函数引用。关键在于它们是一条链，只要有一环传了每次新建的对象或内联函数，整条优化就失效，所以到处加 `memo` 往往只增加成本。
+
+第三是针对具体问题的手段：长列表用虚拟滚动，收益比任何记忆化都大；大计算搬到 Web Worker；输入卡顿用 `useDeferredValue` 或 `useTransition` 把非紧急更新降级，让交互先响应，这直接改善 INP。
+
+最后要记住重渲染本身不等于慢。React 渲染纯 JS 对象很快，真正的成本在提交阶段的 DOM 操作、同步布局读取和昂贵的子组件计算上。
+
+## 深度追问
+
+1. **为什么包了 `React.memo` 还是重渲染？** 因为 `memo` 是浅比较，父组件传入的对象字面量、数组字面量或内联箭头函数每次都是新引用。要么用 `useMemo`/`useCallback` 稳定它们，要么改成传原始值，要么用 `children` 模式绕开。另外组件内部用了会变化的 Context 时，`memo` 也拦不住。
+2. **`useMemo`/`useCallback` 的成本？** 每次渲染都要创建依赖数组、执行比较、保留旧值，内存和 CPU 都有开销。当被缓存的计算很便宜、或者下游没有做记忆化比较时，它们是纯亏损。React Compiler 的价值正是把这类判断自动化。
+3. **`useTransition` 与 `useDeferredValue` 的区别？** 前者包裹**状态更新**，把这次更新标记为可中断的低优先级，并提供 `isPending`；后者接收一个**值**，返回一个滞后版本，适合无法改动更新代码（例如值来自 props）的场景。两者都不减少工作量，只调整优先级。
+
+## 关联专题
+
+- [协调算法与 key](/topics/reconciliation-keys)：复用与跳过是两件事。
+- [Hooks 规则与依赖数组](/topics/hooks-dependencies)：依赖不稳定会让记忆化整条链失效。
+- [状态归属与 Context 边界](/topics/state-architecture)：Context 是最容易造成全树重渲染的地方。
+- [Core Web Vitals 与性能测量](/topics/web-vitals)：用户侧指标才是最终判据。
+
+## 资料来源
+
+- [React — useMemo](https://react.dev/reference/react/useMemo)
+- [React — useTransition](https://react.dev/reference/react/useTransition)

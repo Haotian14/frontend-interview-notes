@@ -1,0 +1,173 @@
+# 原型链与继承
+
+## 一句话结论
+
+对象的属性查找沿原型链向上直到 `null`，写入却默认发生在对象自身；`prototype` 是函数上的一个属性，实例的原型才是那条链，`class` 只是把这套关系包装成更规整的语法。
+
+## 前置知识
+
+请先阅读[this 绑定与调用点](/topics/this-binding)。原型模型能成立的关键正是 `this` 在调用时才绑定：方法只存一份在原型上，被不同实例调用时 `this` 分别指向各自的实例。
+
+## 核心机制
+
+### 查找向上，写入向内
+
+```js
+const base = { greet() { return `hi ${this.name}`; } };
+const user = Object.create(base);
+user.name = 'Ada';
+
+user.greet();                       // 'hi Ada'，greet 来自 base
+Object.hasOwn(user, 'greet');       // false
+Object.getPrototypeOf(user) === base; // true
+```
+
+读取 `user.greet` 时，引擎先查 `user` 自身，没有就查 `base`，再往上是 `Object.prototype`，最后是 `null`。写入则不同：
+
+```js
+user.greet = () => 'hello';   // 写在 user 自身，屏蔽了 base.greet
+delete user.greet;            // 删掉自有属性后，base 上的又重新可见
+```
+
+这条"读向上、写向内"的不对称是很多困惑的根源，比如**在原型上放可变对象**：
+
+```js
+function Bag() {}
+Bag.prototype.items = [];      // 反例：所有实例共享同一个数组
+
+const a = new Bag();
+const b = new Bag();
+a.items.push(1);
+b.items;                       // [1]，因为 push 是读取后修改，没有触发写入屏蔽
+```
+
+`a.items.push(1)` 只是**读**到了原型上的数组再修改它，从未在 `a` 上创建自有属性。可变状态必须放进构造函数里逐实例创建。
+
+### prototype 与实例原型
+
+- `Fn.prototype`：**函数**才有的普通属性，它指向的对象会成为 `new Fn()` 所创建实例的原型。
+- 实例的原型：内部槽位，历史上通过 `__proto__` 访问；现在应当用 `Object.getPrototypeOf` / `Object.setPrototypeOf`。
+
+```js
+function Point(x, y) {
+  this.x = x;
+  this.y = y;
+}
+Point.prototype.length = function () {
+  return Math.hypot(this.x, this.y);
+};
+
+const p = new Point(3, 4);
+Object.getPrototypeOf(p) === Point.prototype;   // true
+Point.prototype.constructor === Point;          // true
+Object.getPrototypeOf(Point.prototype) === Object.prototype; // true
+```
+
+一句话总结：**`prototype` 是给别人当原型用的，`getPrototypeOf` 才是自己的原型**。
+
+### new 做了什么
+
+```js
+function myNew(Ctor, ...args) {
+  // 1. 以 Ctor.prototype 为原型创建对象
+  const instance = Object.create(Ctor.prototype);
+  // 2. 以它为 this 执行构造函数
+  const result = Ctor.apply(instance, args);
+  // 3. 构造函数显式返回对象时以该对象为准，否则返回新建对象
+  return typeof result === 'object' && result !== null ? result : instance;
+}
+```
+
+第三步解释了单例、工厂等模式为什么可以在构造函数里 `return` 一个别的对象；返回原始值则会被忽略。
+
+### class 是语法糖，但不只是语法
+
+```js
+class Shape {
+  static registry = new Map();
+  #id;                             // 私有字段，真正不可从外部访问
+
+  constructor(name) {
+    this.name = name;
+    this.#id = crypto.randomUUID();
+  }
+
+  describe() { return `${this.name}`; }
+}
+
+class Circle extends Shape {
+  constructor(r) {
+    super('circle');               // 必须先调用，否则 this 不可用
+    this.r = r;
+  }
+  describe() { return `${super.describe()} r=${this.r}`; }
+}
+```
+
+对应的原型关系是两条链：
+
+- **实例链**：`new Circle()` → `Circle.prototype` → `Shape.prototype` → `Object.prototype` → `null`。方法定义在 `prototype` 上。
+- **静态链**：`Circle` → `Shape` → `Function.prototype`。这是静态方法和静态属性能被子类继承的原因，用 `function` 写继承时很容易漏掉。
+
+`class` 相比构造函数的真实差别：类体始终是严格模式；类声明不会像函数声明那样被提升到可用（存在暂时性死区）；必须用 `new` 调用，直接调用抛 `TypeError`；原型方法不可枚举；`#` 私有字段是硬性封装，而不是命名约定；派生类在 `super()` 之前访问 `this` 会抛错。
+
+### instanceof 与类型判断
+
+`x instanceof C` 的语义是：沿 `x` 的原型链查找，看是否遇到 `C.prototype`。它检查的是**原型链**，不是"由谁构造"：
+
+```js
+const arr = [];
+arr instanceof Array;                                  // true
+Object.setPrototypeOf(arr, null);
+arr instanceof Array;                                  // false，链断了
+Array.isArray(arr);                                    // 仍然 true
+```
+
+跨 iframe、跨 realm 或者依赖树里有两份同名库时，`instanceof` 会失效，因为两边的 `Array.prototype` 根本不是同一个对象。稳妥的做法是用 `Array.isArray`、`Object.prototype.toString.call(x)` 或结构化的鸭子类型判断。类型判断的细节见[类型转换与相等比较](/topics/type-coercion)。
+
+## 项目应用
+
+1. 共享的**方法**放原型，per-instance 的**状态**放构造函数或字段，永远不要在原型上放数组或对象。
+2. 读取原型统一用 `Object.getPrototypeOf`，创建统一用 `Object.create` 或 `class`；避免 `Object.setPrototypeOf` 与 `__proto__` 赋值，它们会让引擎放弃隐藏类优化。
+3. 用作字典的对象优先 `Object.create(null)` 或直接用 `Map`，避免键与 `Object.prototype` 上的成员冲突（比如键名恰好是 `toString`）。
+4. 检查自有属性用 `Object.hasOwn(obj, key)`，比 `obj.hasOwnProperty(key)` 更安全——后者在无原型对象上会抛错。
+5. **防原型污染**：深合并、`JSON.parse` 后的对象展开、查询字符串解析都要显式拒绝 `__proto__`、`constructor`、`prototype` 这三个键，否则攻击者可以往 `Object.prototype` 上挂属性，影响整个进程内的所有对象。
+6. 不要修改内置对象的原型（monkey patching）。它会和未来的语言特性冲突，也让不同库互相干扰。
+
+## 边界与反例
+
+"`class` 是全新的继承机制"不成立，它底下仍然是原型；但"`class` 只是语法糖"也过于简化——严格模式、TDZ、必须 `new`、私有字段、`super` 的语义都是真实差别。
+
+"`instanceof` 能判断类型"在多 realm 环境下不可靠；`constructor` 属性同样不可靠，它只是原型上一个可被覆盖的普通属性。
+
+`Object.keys`、`for...in`、扩展运算符的行为各不相同：`Object.keys` 和展开只取**自有可枚举**属性，`for...in` 会遍历**原型链上的可枚举**属性。给原型加可枚举属性会污染所有 `for...in` 循环，这也是不要 monkey patch 的理由之一。
+
+原型链过深会让属性查找变慢，但真正的性能杀手是频繁改变对象形状和运行时改原型，而不是链的长度本身。
+
+最后，箭头函数没有 `prototype` 属性，也不能 `new`；`class` 的方法也不能 `new`。
+
+## 面试回答
+
+每个对象都有一个内部原型引用。读属性时先看自有属性，找不到就沿原型链一路向上直到 `null`；写属性则默认只写在自身，形成对原型同名属性的屏蔽。这条不对称解释了为什么原型上的数组会被所有实例共享——`push` 是读取后修改，从未触发写入。
+
+容易混的是 `prototype` 和实例原型：`prototype` 是**函数**才有的属性，它指向的对象将成为实例的原型；实例自己的原型要用 `Object.getPrototypeOf` 读。`new` 做四件事：以构造函数的 `prototype` 为原型创建对象、把它作为 `this` 执行构造函数、若构造函数返回对象则用那个对象、否则返回新建对象。
+
+`class` 是语法糖，方法定义在 `prototype` 上，`extends` 同时接起实例链和静态链，`super()` 调用父类构造并使 `this` 可用；但它也有真实差别：类体是严格模式、存在 TDZ、必须 `new` 调用、支持 `#` 私有字段。
+
+工程上注意两点：`instanceof` 检查的是原型链而非构造函数身份，跨 realm 或多份库副本会失效，用 `Array.isArray` 之类更稳；以及原型污染，合并对象时必须拒绝 `__proto__`、`constructor`、`prototype` 这些键。
+
+## 深度追问
+
+1. **`prototype` 和 `__proto__` 的区别？** `prototype` 是函数对象上的普通属性，用于给 `new` 出来的实例当原型；`__proto__` 是历史遗留的访问器，指向对象自身的原型。前者"给别人用"，后者"是自己的"。现代代码应使用 `Object.getPrototypeOf`/`setPrototypeOf`。
+2. **怎么手写 new？** 创建以 `Ctor.prototype` 为原型的对象，用 `apply` 把它作为 `this` 执行构造函数，若返回值是对象则返回它，否则返回新建对象。这解释了构造函数里 `return` 对象能改变结果，`return` 原始值则被忽略。
+3. **class 与构造函数的真实差别？** 严格模式、暂时性死区、必须 `new`、原型方法不可枚举、`#` 私有字段、派生类 `super()` 前不能用 `this`、静态成员通过静态链继承。这些都不是纯语法。
+
+## 关联专题
+
+- [this 绑定与调用点](/topics/this-binding)：方法共享一份而各自操作不同实例，靠的是调用时的 `this` 绑定。
+- [类型转换与相等比较](/topics/type-coercion)：`instanceof` 之外还有哪些可靠的类型判断手段。
+
+## 资料来源
+
+- [MDN — Inheritance and the prototype chain](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Inheritance_and_the_prototype_chain)
+- [ECMAScript — Ordinary Object Internal Methods](https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots)

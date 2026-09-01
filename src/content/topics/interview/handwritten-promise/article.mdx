@@ -1,0 +1,226 @@
+# 手写 Promise
+
+## 一句话结论
+
+一个合格的实现只有四件事：不可逆的状态机、pending 时的回调队列、`then` 返回新实例的链式规则、以及处理 thenable 的解析过程；回调必须放进微任务执行。
+
+## 前置知识
+
+请先阅读[Promise 状态机与组合](/topics/promise-semantics)和[事件循环与任务队列](/topics/event-loop)。这道题考的是能否把已知语义翻译成实现，并解释每一步为什么必须存在——而不是背下一段代码。
+
+## 核心机制
+
+### 第一步：状态机
+
+```js
+const PENDING = 'pending';
+const FULFILLED = 'fulfilled';
+const REJECTED = 'rejected';
+
+class MyPromise {
+  #state = PENDING;
+  #value = undefined;
+  #callbacks = [];
+
+  constructor(executor) {
+    const resolve = value => this.#settle(FULFILLED, value);
+    const reject = reason => this.#settle(REJECTED, reason);
+    try {
+      executor(resolve, reject);       // 执行器同步执行
+    } catch (error) {
+      reject(error);                   // 执行器同步抛错等价于 reject
+    }
+  }
+
+  #settle(state, value) {
+    if (this.#state !== PENDING) return;   // 只能落定一次，之后全部忽略
+    this.#state = state;
+    this.#value = value;
+    for (const callback of this.#callbacks) queueMicrotask(callback);
+    this.#callbacks = [];
+  }
+}
+```
+
+两个要点：执行器是**同步**执行的；`#settle` 的第一行守卫保证了状态不可逆——这正是 Promise 相对回调的核心价值。
+
+### 第二步：回调队列
+
+`then` 可能在落定之前调用（要排队），也可能在落定之后调用（要立即调度）。两条路径都必须支持：
+
+```js
+  #schedule(callback) {
+    if (this.#state === PENDING) this.#callbacks.push(callback);
+    else queueMicrotask(callback);
+  }
+```
+
+"已落定后注册的回调仍会被调用"是 Promise 与事件的关键差别：事件错过就错过了，Promise 不会。
+
+### 第三步：then 返回新的 Promise
+
+```js
+  then(onFulfilled, onRejected) {
+    const next = new MyPromise((resolve, reject) => {
+      this.#schedule(() => {
+        const settled = this.#state;
+        const handler = settled === FULFILLED ? onFulfilled : onRejected;
+
+        // 回调不是函数时「穿透」：值或原因原样传给下一环
+        if (typeof handler !== 'function') {
+          if (settled === FULFILLED) resolve(this.#value);
+          else reject(this.#value);
+          return;
+        }
+
+        try {
+          resolvePromise(next, handler(this.#value), resolve, reject);
+        } catch (error) {
+          reject(error);               // 回调抛错 → 下一环变为拒绝
+        }
+      });
+    });
+
+    return next;
+  }
+
+  catch(onRejected) { return this.then(undefined, onRejected); }
+
+  finally(onFinally) {
+    return this.then(
+      value  => MyPromise.resolve(onFinally()).then(() => value),
+      reason => MyPromise.resolve(onFinally()).then(() => { throw reason; }),
+    );
+  }
+```
+
+`next` 在回调执行时已经完成赋值（回调总在微任务里跑），所以解析过程能拿到它做自引用检查。
+
+`then` **必须返回新实例**：返回 `this` 会让整条链共享同一个状态，第二个 `then` 的返回值无处安放，`catch` 之后也无法回到兑现状态。`finally` 的写法解释了它"不接收值、不改变结果，但会等待返回的 Promise"这三条语义。
+
+### 第四步：解析过程
+
+这是规范里最容易写错的部分：
+
+```js
+function resolvePromise(next, x, resolve, reject) {
+  // 返回自身会导致永远等待，规范要求抛 TypeError
+  if (next === x) {
+    reject(new TypeError('Chaining cycle detected for promise'));
+    return;
+  }
+
+  if (x !== null && (typeof x === 'object' || typeof x === 'function')) {
+    let called = false;                // 防止不规范的 thenable 多次回调
+    try {
+      const then = x.then;             // 只取一次，getter 可能有副作用
+      if (typeof then === 'function') {
+        then.call(
+          x,
+          y => { if (called) return; called = true; resolvePromise(next, y, resolve, reject); },
+          r => { if (called) return; called = true; reject(r); },
+        );
+      } else {
+        resolve(x);                    // 普通对象，直接兑现
+      }
+    } catch (error) {
+      if (!called) { called = true; reject(error); }
+    }
+  } else {
+    resolve(x);                        // 原始值
+  }
+}
+```
+
+三个细节值得解释：
+
+- **`called` 标志**：`x` 可能是第三方实现的 thenable，它的 `then` 完全可能既调用成功回调又调用失败回调，或者调用多次。规范要求只有第一次生效。
+- **`x.then` 只取一次**：它可能是 getter，重复读取会重复触发副作用。
+- **递归调用**：`y` 本身还可能是 thenable，所以要再走一遍解析过程。这就是"链会等待嵌套 Promise 落定"的实现。
+
+### 静态方法
+
+```js
+MyPromise.resolve = value =>
+  value instanceof MyPromise ? value : new MyPromise(resolve => resolve(value));
+
+MyPromise.reject = reason => new MyPromise((_, reject) => reject(reason));
+
+MyPromise.all = items => new MyPromise((resolve, reject) => {
+  const list = [...items];
+  const results = new Array(list.length);
+  let remaining = list.length;
+  if (remaining === 0) { resolve(results); return; }
+
+  list.forEach((item, index) => {
+    MyPromise.resolve(item).then(value => {
+      results[index] = value;             // 按输入顺序写入，不是完成顺序
+      if (--remaining === 0) resolve(results);
+    }, reject);                            // 任一失败立即拒绝
+  });
+});
+
+MyPromise.race = items => new MyPromise((resolve, reject) => {
+  for (const item of items) MyPromise.resolve(item).then(resolve, reject);
+});
+
+MyPromise.allSettled = items => MyPromise.all(
+  [...items].map(item => MyPromise.resolve(item).then(
+    value  => ({ status: 'fulfilled', value }),
+    reason => ({ status: 'rejected', reason }),
+  )),
+);
+```
+
+`all` 里的空数组分支、按索引写入结果、以及用计数器而不是判断已完成数量（结果可能是 `undefined`），都是常见的踩坑点。
+
+## 项目应用
+
+1. 面试时先说清四个步骤再动手，边写边解释每一步的理由，比默写完整代码得分高得多。
+2. 用 `promises-aplus-tests` 跑一遍自己的实现，能快速暴露解析过程里的边界问题。
+3. 真实项目里当然用原生 Promise。这道题的实际价值是让你在读框架源码、封装回调式 API、排查时序问题时有底层模型。
+4. 封装老式回调 API 时记住：执行器要保持同步，不要写成 `new Promise(async (resolve) => …)`，`async` 回调里抛出的异常无法到达外层。
+5. 实现自定义 thenable（例如可取消的任务对象）时，务必保证 `then` 只回调一次，否则会破坏使用方的假设。
+
+## 边界与反例
+
+用 `setTimeout` 代替 `queueMicrotask` 也能"跑通"大部分用例，但时序不对：Promise 回调属于微任务，会在当前宏任务结束前执行完；换成宏任务后，`Promise.resolve().then(...)` 与 `setTimeout(...)` 的相对顺序就变了，与原生行为不一致。
+
+`then` 返回 `this` 是最常见的错误实现。它让链上所有环共享状态，`catch` 之后无法恢复为兑现，也无法表达"回调返回值决定下一环状态"。
+
+漏掉"回调不是函数时穿透"会让 `p.then(null).then(v => …)` 拿不到值，`p.catch(fn)` 也无法从更早的环接住错误。
+
+只判断 `x instanceof MyPromise` 而不处理通用 thenable，会导致无法与原生 Promise 或其它库互操作——规范特意用鸭子类型（有可调用的 `then`）而不是类型判断，正是为了互操作。
+
+最后，这个实现不包含**未处理拒绝**的检测。原生 Promise 会在没有拒绝处理器时触发 `unhandledrejection`，自实现版本没有这个能力，这也是不要在生产中用它的原因之一。
+
+## 面试回答
+
+我会分四步写。
+
+第一步是**状态机**：三个状态加上值，`resolve` 和 `reject` 都先判断是否仍为 `pending`，不是就直接返回，保证状态只能改变一次；执行器同步执行，它抛出的异常等价于 `reject`。
+
+第二步是**回调队列**：注册 `then` 时如果还是 pending，就把回调存进数组，落定时按顺序取出执行；如果已经落定，则直接调度。这样后挂的 `then` 也能拿到结果。
+
+第三步是 **`then` 返回一个新的 Promise**，这是链式的基础。回调的返回值决定新 Promise 的状态：返回普通值就兑现，抛出异常就拒绝，返回 thenable 就进入解析过程。回调不是函数时要做值穿透。
+
+第四步是**解析过程**：判断返回值是不是对象或函数并取它的 `then`，是函数就以 thenable 方式调用；同时要加一个只执行一次的标志，防止不规范的 thenable 多次回调；还要检查返回值是不是新 Promise 自身，是的话按规范抛 `TypeError`。
+
+另外所有回调都必须异步执行，我用 `queueMicrotask` 保证时序与原生一致——用 `setTimeout` 会变成宏任务，顺序就错了。这道题真正考察的不是背代码，而是能不能解释每一步为什么必须存在。
+
+## 深度追问
+
+1. **为什么 `then` 必须返回新的 Promise？** 因为每一环的结果由**这一环回调的返回值**决定，而不是上一环的状态。返回 `this` 会让所有环共享同一个已落定的状态，链上后续的转换、`catch` 之后的恢复、以及"回调抛错变成拒绝"这些语义全部无法表达。
+2. **为什么回调必须异步，用宏任务行不行？** 异步执行保证 `then` 的回调不会在当前同步代码中间插入，行为可预测。必须是**微任务**：微任务在当前宏任务结束前清空，所以 `Promise.then` 总是先于 `setTimeout` 执行。换成宏任务实现虽然能跑通，但与原生的相对时序不一致。
+3. **解析过程为什么需要 `called` 标志？** 因为返回值可能是第三方实现的 thenable，它的 `then` 不保证只回调一次，甚至可能同时调用成功和失败回调。规范要求只有第一次调用生效，`called` 就是这个保证；同理 `x.then` 只读取一次，避免 getter 的重复副作用。
+
+## 关联专题
+
+- [Promise 状态机与组合](/topics/promise-semantics)：先理解语义再实现。
+- [事件循环与任务队列](/topics/event-loop)：为什么必须是微任务。
+- [async/await 与错误处理](/topics/async-await-errors)：同一套语义的语法层。
+
+## 资料来源
+
+- [Promises/A+ 规范](https://promisesaplus.com/)
+- [ECMAScript — Promise Objects](https://tc39.es/ecma262/#sec-promise-objects)

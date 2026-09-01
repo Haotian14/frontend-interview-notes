@@ -1,0 +1,151 @@
+# this 绑定与调用点
+
+## 一句话结论
+
+`this` 与函数定义在哪里无关，只由**调用点**决定；箭头函数是唯一的例外——它没有自己的 `this`，只是沿词法作用域向外借。
+
+## 前置知识
+
+请先阅读[作用域链与闭包](/topics/closures-scope)，理解词法作用域是在定义时确定的。把它和 `this` 对照着看最有效：**作用域看定义位置，`this` 看调用位置**，两条规则方向相反，混在一起就会得出各种自相矛盾的直觉。
+
+## 核心机制
+
+### 四条规则，从高到低
+
+判定 `this` 时按下面的顺序问，先命中的胜出：
+
+1. **new 绑定**：`new Fn()` 会创建一个新对象并把它作为 `this`。
+2. **显式绑定**：`fn.call(ctx)`、`fn.apply(ctx)`、`fn.bind(ctx)` 直接指定。`bind` 返回的新函数被永久固定，再 `call` 也改不回来。
+3. **隐式绑定**：`obj.fn()` 形式，`this` 是点号前面那个对象。注意**只看最后一层**：`a.b.c()` 里 `this` 是 `b`，不是 `a`。
+4. **默认绑定**：以上都不满足的独立调用。严格模式（含 ES 模块、`class` 体内）下 `this` 是 `undefined`；非严格模式下会被替换成全局对象。
+
+```js
+'use strict';
+
+const counter = {
+  count: 0,
+  increment() {
+    this.count += 1;
+    return this.count;
+  },
+};
+
+counter.increment();          // 隐式绑定，this === counter
+
+const bare = counter.increment;
+bare();                       // 默认绑定，this === undefined → TypeError
+
+bare.call(counter);           // 显式绑定，正常工作
+setTimeout(counter.increment.bind(counter), 0);  // 固定住
+setTimeout(() => counter.increment(), 0);        // 调用点仍是 counter.increment()
+```
+
+第三行是实践中最高频的 bug：**把方法作为回调传出去时，引用被"摘"了下来**，调用点变成独立调用，隐式绑定随之丢失。
+
+### 箭头函数没有 this
+
+箭头函数不创建自己的 `this` 绑定，函数体里的 `this` 就是**定义它的那层作用域**里的 `this`，因此：
+
+- `call`、`apply`、`bind` 传入的第一个参数对它无效（不报错，只是被忽略）。
+- 它不能用作构造函数，`new` 会抛 `TypeError`。
+- 它也没有自己的 `arguments`、`super`、`new.target`。
+
+```js
+const timer = {
+  seconds: 0,
+  startBroken() {
+    setInterval(function () {
+      this.seconds += 1;      // this 是默认绑定，不是 timer
+    }, 1000);
+  },
+  startFixed() {
+    setInterval(() => {
+      this.seconds += 1;      // 箭头函数借用 startFixed 的 this
+    }, 1000);
+  },
+};
+```
+
+反过来，**对象字面量里的方法不要写成箭头函数**：对象字面量不产生作用域，那里的 `this` 是外层的（模块顶层通常是 `undefined`），并不指向对象本身。
+
+```js
+const wrong = {
+  name: 'a',
+  greet: () => `hi ${this?.name}`,   // this 不是 wrong
+};
+```
+
+### class 里的两种写法
+
+```js
+class SearchBox {
+  query = '';
+
+  // 原型方法：所有实例共享一份，但脱离实例调用会丢 this
+  handleInputMethod(event) {
+    this.query = event.target.value;
+  }
+
+  // 实例字段 + 箭头函数：每个实例一份，this 永久锁定
+  handleInputField = event => {
+    this.query = event.target.value;
+  };
+}
+```
+
+原型方法更省内存，也更容易被子类覆盖和被测试替身桩掉，但作为回调传出去时必须自己 `bind`。箭头函数字段用起来省心，代价是每个实例都持有一个新函数对象，且它是实例自有属性——不在原型上，`super` 和覆盖的语义都不同。
+
+`class` 体（包括方法体）**始终是严格模式**，所以脱离实例调用得到的是 `undefined` 而不是全局对象，报错更早、更明确。
+
+### DOM 与其它宿主
+
+- 用 `addEventListener` 注册的**普通函数**处理器，`this` 是绑定监听的那个元素，等同于 `event.currentTarget`。用箭头函数则不是，此时应当用 `event.currentTarget`。
+- `event.target` 是实际触发事件的最深节点，事件委托时它和 `currentTarget` 不同。
+- 数组方法如 `map`、`forEach` 接受第二个参数作为 `thisArg`；但用箭头函数比传 `thisArg` 更清晰。
+- 模块顶层的 `this` 是 `undefined`（不是 `window`）；CommonJS 里是 `module.exports`；这是判断代码运行在哪个模块系统的一个线索，详见[模块系统与 ESM](/topics/module-systems)。
+
+## 项目应用
+
+1. 传递方法引用前先问一句"调用点会变成什么"。需要传出去时，用箭头函数包一层或在构造函数里 `bind`。
+2. React 类组件时代的 `this.handleClick = this.handleClick.bind(this)` 就是这条规则的产物；函数组件把状态放进闭包，从根本上取消了这个问题。
+3. 工具函数尽量写成不依赖 `this` 的纯函数，参数显式传入。依赖 `this` 的 API 天然更难组合。
+4. 事件处理里统一用 `event.currentTarget` 而不是 `this`，这样处理器写成箭头函数还是普通函数都不影响。
+5. 代码审查时看到 `const self = this` 或 `var that = this`，通常意味着可以换成箭头函数。
+6. TypeScript 里可以给函数声明 `this` 参数（`function fn(this: HTMLElement, ...)`），让编译器帮你检查调用点。
+
+## 边界与反例
+
+"箭头函数的 this 指向定义它的对象"是错的——是**定义它的那层作用域的 `this`**。对象字面量不构成作用域，所以对象里的箭头方法拿不到该对象。
+
+"`bind` 之后还能再 `bind` 改回来"也不对：第二次 `bind` 会被忽略，`this` 已经被硬绑定。但 `new` 是个例外，`new (fn.bind(ctx))()` 时新对象仍然胜出。
+
+`fn.call(null)` 在严格模式下 `this` 就是 `null`，不会被替换；只有非严格模式才会把 `null`/`undefined` 替换成全局对象，把原始值包装成对象。
+
+`this` 与闭包解决的是不同问题：闭包捕获的是**变量**，`this` 捕获的是**调用上下文**。用 `const self = this` 是把 `this` 转成变量交给闭包管理，这也解释了它为什么有效。
+
+最后，`getter`/`setter`、`Proxy` 的 trap、解构赋值（`const { increment } = counter`）都会改变或丢失调用点，解构对象方法是另一个常见的 `this` 丢失来源。
+
+## 面试回答
+
+`this` 不由函数定义的位置决定，而由调用点决定。判定顺序是：`new` 调用时 `this` 是新创建的对象；`call`/`apply`/`bind` 显式指定时是传入的值；`obj.fn()` 形式是点号前面的对象，而且只看最后一层，`a.b.c()` 里是 `b`；剩下的独立调用属于默认绑定，严格模式下是 `undefined`，非严格模式下被替换成全局对象。
+
+箭头函数是唯一的例外：它没有自己的 `this`，只沿词法作用域向外找，所以 `call` 和 `bind` 对它无效，这也正是回调里用箭头函数能保住 `this` 的原因；反过来对象字面量里的方法就不该写成箭头函数。
+
+实践中最常见的坑是把方法当作回调传出去，引用被摘下来后只剩默认绑定，解决办法是 `bind`、箭头函数包一层，或写成 `class` 字段。补充一点：`class` 体始终是严格模式，脱离实例调用得到 `undefined` 而不是全局对象，反而让错误暴露得更早。
+
+## 深度追问
+
+1. **箭头函数的 this 为什么改不了？** 因为它在语法层面就不创建 `this` 绑定，函数体里的 `this` 是对外层作用域标识符的引用，走的是作用域链查找。`call` 只能设置函数调用时的 `this` 绑定，而这个函数根本没有这样一个槽位。
+2. **class 方法与箭头字段的取舍？** 原型方法每个类只有一份，节省内存，可被子类覆盖、便于测试替身；缺点是作为回调需要手动 `bind`。箭头字段每个实例一份，`this` 天然正确，但占用更多内存、位于实例而非原型上、也不参与 `super` 的方法查找。事件处理器多、实例少的场景用字段，反之用原型方法加 `bind`。
+3. **事件处理器里的 this 是什么？** 用 `addEventListener` 注册普通函数时，`this` 等于 `event.currentTarget`，也就是绑定监听的元素；用箭头函数时 `this` 来自外层作用域。为了不依赖这个差异，统一用 `event.currentTarget` 更稳妥；`event.target` 则是实际触发的最深节点，事件委托时两者不同。
+
+## 关联专题
+
+- [作用域链与闭包](/topics/closures-scope)：作用域看定义位置、`this` 看调用位置，两条规则要分开记。
+- [原型链与继承](/topics/prototype-inheritance)：方法在原型上，`this` 在调用时才绑定到实例，这是原型模型能工作的关键。
+- [模块系统与 ESM](/topics/module-systems)：模块顶层 `this` 的差异可以用来判断运行环境。
+
+## 资料来源
+
+- [MDN — this](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this)
+- [ECMAScript — Function Calls](https://tc39.es/ecma262/#sec-function-calls)

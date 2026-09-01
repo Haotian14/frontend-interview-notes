@@ -84,5 +84,7 @@ export default defineConfig(({ isSsrBuild, mode }) => ({
     css: true,
     globals: true,
     exclude: [...configDefaults.exclude, 'tests/e2e/**'],
+    // 内容合同会逐篇渲染全部专题；专题数量增长后 5 秒的默认上限不够用。
+    testTimeout: 60_000,
   },
 }));
