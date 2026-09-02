@@ -50,7 +50,17 @@ function applyMetadata(html, route) {
       /<meta property="og:description" content="[^"]*"\s*\/>/,
       `<meta property="og:description" content="${description}" />`,
     )
-    .replace('</head>', `  <link rel="canonical" href="${canonical}" />\n  </head>`);
+    // og:image 必须是绝对地址：微信、X 和 Facebook 的抓取器都不会拿相对路径
+    // 去拼当前页面的 origin，留成 /og.webp 等于没有社交卡片图。
+    .replace(
+      /<meta property="og:image" content="[^"]*"\s*\/>/,
+      `<meta property="og:image" content="${siteOrigin}/og.webp" />`,
+    )
+    .replace(
+      '</head>',
+      `  <meta property="og:url" content="${canonical}" />\n`
+      + `  <link rel="canonical" href="${canonical}" />\n  </head>`,
+    );
 }
 
 const routes = collectRoutes();

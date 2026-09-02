@@ -44,6 +44,38 @@ if (initialGzipBytes > initialLimit) {
   throw new Error(`首屏 JavaScript gzip 超出 130KB：${initialGzipBytes} bytes`);
 }
 
+/*
+  惰性分片同样要有上限。
+
+  首屏预算只统计 index.html 引用的文件，按需加载的分片完全在它的视野之外——
+  正文检索索引一度和对话框代码打进同一片，按一下搜索要下载 180KB gzip，
+  而构建检查全程沉默。这里给分片单独立规矩：数据索引和代码分开限额。
+*/
+const lazyChunks = (await readdir(join(clientDist, 'assets')))
+  .filter(name => name.endsWith('.js') && !initialFiles.has(join('assets', name).replace(/\\/g, '/')));
+
+const chunkSizes = [];
+for (const name of lazyChunks) {
+  const bytes = gzipSync(await readFile(join(clientDist, 'assets', name))).byteLength;
+  chunkSizes.push({ name, bytes });
+}
+
+// 生成的检索索引是数据而不是代码：它随正文增长，单独给一条更宽的线。
+const dataChunkLimit = 200 * 1024;
+const codeChunkLimit = 40 * 1024;
+const isDataChunk = name => /^(search-index|interview-index)-/.test(name);
+
+for (const { name, bytes } of chunkSizes) {
+  const limit = isDataChunk(name) ? dataChunkLimit : codeChunkLimit;
+  if (bytes > limit) {
+    throw new Error(
+      `惰性分片 ${name} gzip 超出 ${(limit / 1024).toFixed(0)}KB：${bytes} bytes`,
+    );
+  }
+}
+
+const largestChunk = chunkSizes.sort((a, b) => b.bytes - a.bytes)[0];
+
 // 预渲染必须真的产出内容，否则 SEO 与首屏收益全部落空。
 const homeHtml = await readFile(join(clientDist, 'index.html'), 'utf8');
 if (/<div id="root"><\/div>/.test(homeHtml)) {
@@ -94,8 +126,14 @@ const forbidden = [
   'fonts.' + 'googleapis',
 ];
 
-// 本地存储只允许通过 progressStore 这一个封装出入，避免散落各处的直接读写。
-const storageAllowlist = new Set(['src\\features\\progress\\progressStore.ts']);
+// 本地存储只允许通过这几个封装出入，避免散落各处的直接读写：
+// progressStore 管阅读进度，themeStore 管主题偏好，index.html 里是防止
+// 主题闪烁的内联脚本（它必须在 React 之前运行，所以无法走模块）。
+const storageAllowlist = new Set([
+  'src\\features\\progress\\progressStore.ts',
+  'src\\features\\theme\\themeStore.ts',
+  'index.html',
+]);
 
 for (const file of sourceFiles) {
   const content = await readFile(file, 'utf8');
@@ -112,5 +150,9 @@ for (const file of sourceFiles) {
 
 stdout.write(`Initial JavaScript gzip: ${initialGzipBytes} bytes `);
 stdout.write(`(vendor ${vendorGzipBytes} + app ${appGzipBytes})\n`);
+stdout.write(
+  `Largest lazy chunk: ${largestChunk.name} ${largestChunk.bytes} bytes `
+  + `(${chunkSizes.length} lazy chunks)\n`,
+);
 stdout.write(`Social image: ${socialImage.size} bytes\n`);
 stdout.write('Forbidden behavior scan: PASS\n');

@@ -10,7 +10,7 @@ export const meta: TopicMeta = {
   minutes: 26,
   keywords: ['XSS', '输出编码', 'CSP', 'DOM 注入', 'nonce'],
   prerequisites: ['semantic-accessibility'],
-  related: ['semantic-accessibility', 'type-narrowing'],
+  related: ['semantic-accessibility', 'csrf-defense'],
   sources: [
     { label: 'OWASP — Cross Site Scripting Prevention Cheat Sheet', href: 'https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html' },
     { label: 'MDN — Content Security Policy', href: 'https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP' },

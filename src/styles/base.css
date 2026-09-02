@@ -16,7 +16,7 @@ body {
   min-height: 100vh;
   color: var(--color-ink);
   background:
-    linear-gradient(rgb(23 25 20 / 3%) 1px, transparent 1px),
+    linear-gradient(var(--color-rule) 1px, transparent 1px),
     var(--color-paper);
   background-size: 100% 32px;
   font-family: var(--font-body);

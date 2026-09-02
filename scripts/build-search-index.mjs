@@ -18,7 +18,7 @@ const OUTPUT = join(process.cwd(), 'src/generated/search-index.json');
 /** 每条记录的正文上限，避免 Fuse 在超长字符串上做无谓的模糊匹配。 */
 const MAX_TEXT = 600;
 
-function stripInline(text) {
+export function stripInline(text) {
   return text
     // 图片先于链接处理，否则 ![alt](src) 会留下一个孤立的 !
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')

@@ -10,9 +10,11 @@ const STORAGE_KEY = 'handbook:progress:v1';
 export type ProgressState = {
   /** 已标记读完的专题 slug。 */
   read: string[];
+  /** 已标记掌握的面试题 id（主问题是 slug，追问是 slug#序号）。 */
+  mastered: string[];
 };
 
-const EMPTY: ProgressState = { read: [] };
+const EMPTY: ProgressState = { read: [], mastered: [] };
 
 /**
  * 预渲染在 Node 里执行、隐私模式下访问会抛异常，所以每次读写都要能安全失败：
@@ -45,10 +47,16 @@ export function readProgress(): ProgressState {
     }
 
     // 存储内容可能来自旧版本或被手工改过，逐项校验后才采信。
-    const read = (parsed as ProgressState).read.filter(
-      (slug): slug is string => typeof slug === 'string',
-    );
-    return { read };
+    // mastered 是后加的字段，旧数据里没有，缺失时按空数组处理而不是整份丢弃。
+    const strings = (value: unknown) =>
+      (Array.isArray(value) ? value : []).filter(
+        (entry): entry is string => typeof entry === 'string',
+      );
+
+    return {
+      read: strings((parsed as ProgressState).read),
+      mastered: strings((parsed as ProgressState).mastered),
+    };
   } catch {
     return EMPTY;
   }
@@ -70,7 +78,15 @@ export function toggleRead(state: ProgressState, slug: string): ProgressState {
     ? state.read.filter(entry => entry !== slug)
     : [...state.read, slug];
 
-  return { read };
+  return { ...state, read };
+}
+
+export function toggleMastered(state: ProgressState, id: string): ProgressState {
+  const mastered = state.mastered.includes(id)
+    ? state.mastered.filter(entry => entry !== id)
+    : [...state.mastered, id];
+
+  return { ...state, mastered };
 }
 
 export function clearProgress(): void {

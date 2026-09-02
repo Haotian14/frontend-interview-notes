@@ -2,7 +2,6 @@ import Fuse from 'fuse.js';
 import type { FuseResult } from 'fuse.js';
 import { getTopic, topics } from '../../content/registry';
 import type { TopicMeta } from '../../content/types';
-import sectionRecords from '../../generated/search-index.json';
 
 export type SearchSection = {
   slug: string;
@@ -23,7 +22,19 @@ export type SearchHit = {
   };
 };
 
-const sections = sectionRecords as SearchSection[];
+/*
+  正文索引有 666 条记录、约 460KB。静态 import 会把它压进 SearchDialog 那个
+  分片，按一下搜索就要下载并解析 180KB gzip 的 JavaScript。改成动态 import
+  后它自成一片：与对话框代码并行下载、单独缓存（正文没变时无需重新下载），
+  而且对话框可以先用元数据结果渲染，索引到达后再补上正文命中。
+*/
+let sectionsPromise: Promise<SearchSection[]> | null = null;
+
+export function loadSearchSections(): Promise<SearchSection[]> {
+  sectionsPromise ??= import('../../generated/search-index.json')
+    .then(module => module.default as SearchSection[]);
+  return sectionsPromise;
+}
 
 /** 元数据索引：标题和关键词的匹配应当排在正文之前。 */
 export function createSearchIndex(source: TopicMeta[]) {
@@ -72,13 +83,21 @@ function buildExcerpt(result: FuseResult<SearchSection>) {
 
 let topicIndex: ReturnType<typeof createSearchIndex> | undefined;
 let sectionIndex: ReturnType<typeof createSectionIndex> | undefined;
+let indexedSections: SearchSection[] | undefined;
 
-export function searchTopics(query: string): SearchHit[] {
+/**
+ * sections 由调用方传入：索引是异步到达的，传空数组时只搜元数据，
+ * 这样对话框在索引下载完成前也能用。
+ */
+export function searchTopics(query: string, sections: SearchSection[] = []): SearchHit[] {
   const normalized = query.trim();
   if (!normalized) return [];
 
   topicIndex ??= createSearchIndex(topics);
-  sectionIndex ??= createSectionIndex(sections);
+  if (indexedSections !== sections) {
+    sectionIndex = createSectionIndex(sections);
+    indexedSections = sections;
+  }
 
   const hits = new Map<string, SearchHit>();
 
@@ -89,7 +108,7 @@ export function searchTopics(query: string): SearchHit[] {
     });
   }
 
-  for (const result of sectionIndex.search(normalized)) {
+  for (const result of sectionIndex!.search(normalized)) {
     const topic = getTopic(result.item.slug);
     if (!topic) continue;
 

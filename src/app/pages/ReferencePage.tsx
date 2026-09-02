@@ -1,44 +1,19 @@
 import { lazy, Suspense } from 'react';
-import { Link } from 'react-router-dom';
 import { getTopic, loadAllPractices } from '../../content/registry';
-import { topicPath } from '../paths';
 
-// 速查表按需加载，理由同 /interview：它只服务这一个页面。
+// 表格数据和渲染表格的组件一起惰性加载，理由同 /code：页面模块顶层 import
+// 的东西都会进首屏包，而 FilterBar 和这些表格只服务这一页。
 const ReferenceTables = lazy(async () => {
-  const referenced = (await loadAllPractices())
-    .filter(practice => practice.reference)
-    .map(practice => ({ practice, topic: getTopic(practice.slug)! }));
+  const [{ default: ReferenceCatalog }, practices] = await Promise.all([
+    import('./ReferenceCatalog'),
+    loadAllPractices(),
+  ]);
 
-  return {
-    default: () => (
-      <div className="reference-tables">
-        {referenced.map(({ practice, topic }) => (
-          <div className="table-scroll" key={practice.slug}>
-            <table>
-              <caption>{practice.reference!.caption}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">概念</th>
-                  <th scope="col">判断</th>
-                </tr>
-              </thead>
-              <tbody>
-                {practice.reference!.rows.map(row => (
-                  <tr key={row.term}>
-                    <th scope="row">{row.term}</th>
-                    <td>{row.meaning}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="reference-source">
-              来自专题 <Link to={topicPath(topic)}>{topic.title}</Link>
-            </p>
-          </div>
-        ))}
-      </div>
-    ),
-  };
+  const entries = practices
+    .filter(practice => practice.reference)
+    .map(practice => ({ topic: getTopic(practice.slug)!, table: practice.reference! }));
+
+  return { default: () => <ReferenceCatalog entries={entries} /> };
 });
 
 export default function ReferencePage() {

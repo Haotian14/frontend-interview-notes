@@ -102,13 +102,6 @@
   line-height: 1.82;
 }
 
-.topic-content__document-title {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-}
-
 .topic-content h2 {
   margin-top: 3.5rem;
   padding-top: 0.65rem;
@@ -141,7 +134,7 @@
 
 .topic-content a {
   font-weight: 650;
-  text-decoration-color: #76a91e;
+  text-decoration-color: var(--color-link-underline);
 }
 
 .content-quote {
