@@ -1,6 +1,6 @@
 # 前端复习手册 V2
 
-一个基于 React、TypeScript、Vite 与 MDX 的前端知识手册。11 个知识章节均已有内容，共 50 篇统一质量标准的专题，配合正文全文检索、面试训练、代码索引、速查表和本地阅读进度。
+一个基于 React、TypeScript、Vite 与 MDX 的前端知识手册。11 个知识章节均已有内容，共 50 篇统一质量标准的专题，配合正文全文检索、面试训练、代码索引、速查表、依赖关系图和本地阅读进度。界面提供浅色/深色两套主题。
 
 站点在构建期完成预渲染：每条路由都产出带完整正文的静态 HTML，因此首屏文字不依赖 JavaScript，搜索引擎也能直接抓取内容。
 
@@ -12,10 +12,10 @@
 | `/handbook` | 完整章节目录 |
 | `/handbook/:chapter` | 章节页 |
 | `/handbook/:chapter/:topic` | 稳定、可直接刷新的专题页 |
-| `/knowledge-map` | 章节与专题关系 |
-| `/interview` | 90 秒面试训练 |
-| `/code` | 含代码样板专题索引 |
-| `/reference` | 五类前端速查表 |
+| `/knowledge-map` | 按前置关系排出的学习顺序与专题邻接关系 |
+| `/interview` | 90 秒面试训练，题库含主问题与正文追问 |
+| `/code` | 含代码样板专题索引，可按章节、难度与关键词筛选 |
+| `/reference` | 全部专题速查表，可按章节、难度与关键词筛选 |
 
 ## 专题目录
 
@@ -29,6 +29,8 @@ src/content/topics/<chapter>/<slug>/
 ```
 
 `meta.ts` 提供标题、摘要、层级、阅读时间、关键词、前置/关联专题、HTTPS 资料、搜索文本，以及 `hasCode` 标记。它对全站的目录、章节页、知识地图和搜索都是必需的，因此随首屏加载。
+
+`prerequisites` 与 `related` 由 `src/content/graph.ts` 组装成关系图：前置关系拓扑分层后成为 `/knowledge-map` 上的学习顺序，反向边给出「读完这篇解锁了哪些」。前置关系成环会被内容合同拒绝，否则学习顺序无法排出。
 
 `practice.ts` 提供三样只服务特定页面的长文本：`interview`（专题页顶部的结论卡片与 `/interview` 的参考答案）、可选的 `reference`（`/reference` 上的一张速查表）、以及 `hasCode` 为真时必填的 `code`（预期输入与可观察输出，驱动 `/code`）。这部分按专题各成一个惰性分片——它是全站文本量最大的部分，放进 `meta.ts` 会让每个访客都下载全部专题的答案。
 
@@ -69,17 +71,32 @@ npm run build
 - `check`：依次执行 lint、类型检查、全部测试和生产构建。
 - `build`：验证内容 → 构建客户端 → 构建 SSR 包 → 预渲染全部路由并生成 sitemap/robots/404 → 构建 Sites Worker → 校验产物。
 
+产物校验同时盯三条线：首屏应用代码 gzip ≤ 30KB、首屏 JavaScript 总量 gzip ≤ 130KB，以及惰性分片的上限（数据索引 200KB、代码分片 40KB）。最后一条是后加的——首屏预算看不见按需加载的分片，正文索引曾因此和搜索对话框打进同一片而无人察觉。
+
 ## 检索
 
 搜索同时覆盖两层：`meta.ts` 的标题与关键词，以及由 `scripts/build-search-index.mjs` 从 `article.mdx` 正文生成的小节索引。命中正文时结果会显示所在小节与摘录，并直接深链到该标题的锚点。
 
-索引在 dev、test 和 build 三条路径上都由 Vite 插件自动重建，产物写入 `src/generated/`（不入版本库），因此不会与正文脱节。
+正文索引约 460KB，通过动态 import 单独成片：搜索对话框先用元数据结果开工，索引到达后再补上正文命中。这样按下搜索只需要下载对话框自身的代码，索引与代码分开缓存。
+
+## 构建期生成的索引
+
+`scripts/build-search-index.mjs` 与 `scripts/build-interview-index.mjs` 都从 `article.mdx` 生成产物，写入 `src/generated/`（不入版本库）。两者在 dev、test 和 build 三条路径上由同一个 Vite 插件重建，因此不会与正文脱节。
+
+- **检索索引**：按「标题 → 段落」切分正文。
+- **追问题库**：抽取「深度追问」小节里 `1. **问题？** 答案` 形式的问答对，作为 `/interview` 的真实题目。不符合该写法的小节会退回 `practice.ts` 的 `followUps`，此时只给出本专题结论作为参考方向。`src/content/interview-index.test.ts` 盯住这条管线，抽取失效时会失败而不是静默退回模板。
 
 ## 数据与隐私
 
 应用不创建账户，不使用 Cookie，也不加载第三方域上的任何资源；构建校验会拒绝 `document.cookie` 和外部字体域。
 
-唯一写入浏览器的是阅读进度（哪些专题被标记为读完），只存在本机 `localStorage`，不参与任何网络请求，可以在目录页一键清除。它被限制在 `src/features/progress/progressStore.ts` 这一个模块内，其它文件直接访问 `localStorage` 会导致构建失败。
+写入浏览器的只有三样，都存在本机 `localStorage`，不参与任何网络请求：
+
+- **阅读进度**：哪些专题被标记为读完，可以在目录页一键清除。
+- **面试掌握度**：哪些题目被标记为掌握，与阅读进度存在同一条记录里。
+- **主题偏好**：跟随系统 / 浅色 / 深色；选择「跟随系统」时不写入任何内容。
+
+访问 `localStorage` 被限制在 `src/features/progress/progressStore.ts`、`src/features/theme/themeStore.ts` 和 `index.html` 的防闪烁内联脚本三处，允许名单由 `scripts/verify-build.mjs` 强制，其它文件直接访问会导致构建失败。
 
 筛选、计时、答案展开和当前题目仍然只存在于组件内存中。
 

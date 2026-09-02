@@ -1,3 +1,13 @@
+/*
+ * 浅色是基准调色板，深色只覆盖颜色令牌，尺寸与字体在两套主题里共用。
+ *
+ * 深色规则写两遍是有意的：
+ * - `@media (prefers-color-scheme: dark)` 里排除 [data-theme="light"]，
+ *   让「手动选浅色」能压过系统的深色；
+ * - `:root[data-theme="dark"]` 让「手动选深色」在浅色系统下也生效。
+ * 没有 data-theme 属性时（跟随系统）只有媒体查询起作用。
+ */
+
 :root {
   --color-paper: #f3f0e7;
   --color-surface: #fbfaf5;
@@ -12,8 +22,16 @@
   --color-blue-ink: #244d86;
   --color-danger-soft: #ffe7dc;
   --color-danger-ink: #7a2f13;
+
+  /* 纸张横纹、吸顶头部的半透明底色、以及弹层遮罩。 */
+  --color-rule: rgb(23 25 20 / 3%);
+  --color-header-bg: rgb(243 240 231 / 94%);
+  --color-scrim: rgb(23 25 20 / 55%);
+
   --content-width: 760px;
-  --focus-ring: 3px solid #76a91e;
+  /* 原先的 #76a91e 对纸张只有 2.47:1，达不到 WCAG 2.2 非文本 3:1。 */
+  --focus-ring: 3px solid #527714;
+  --color-link-underline: #527714;
   --font-body: 'Noto Sans SC Variable', system-ui, sans-serif;
   --font-mono: 'DM Mono', ui-monospace, monospace;
   --shadow-panel: 0 22px 60px rgb(34 35 29 / 10%);
@@ -27,4 +45,60 @@
   --space-6: 2rem;
   --space-7: 3rem;
   --space-8: 4.5rem;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-paper: #14150f;
+    --color-surface: #1c1e17;
+    --color-surface-strong: #24261e;
+    --color-ink: #eceadf;
+    --color-muted: #a2a496;
+    --color-line: #33362c;
+    --color-line-strong: #6b6f5f;
+    --color-accent: #b8f34a;
+    --color-accent-ink: #172006;
+    --color-blue-soft: #1b2a44;
+    --color-blue-ink: #a8c6f0;
+    --color-danger-soft: #3a1d10;
+    --color-danger-ink: #ffb495;
+
+    --color-rule: rgb(236 234 223 / 4%);
+    --color-header-bg: rgb(20 21 15 / 92%);
+    --color-scrim: rgb(6 7 4 / 70%);
+
+    --focus-ring: 3px solid #b8f34a;
+    --color-link-underline: #b8f34a;
+    --shadow-panel: 0 22px 60px rgb(0 0 0 / 55%);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --color-paper: #14150f;
+  --color-surface: #1c1e17;
+  --color-surface-strong: #24261e;
+  --color-ink: #eceadf;
+  --color-muted: #a2a496;
+  --color-line: #33362c;
+  --color-line-strong: #6b6f5f;
+  --color-accent: #b8f34a;
+  --color-accent-ink: #172006;
+  --color-blue-soft: #1b2a44;
+  --color-blue-ink: #a8c6f0;
+  --color-danger-soft: #3a1d10;
+  --color-danger-ink: #ffb495;
+
+  --color-rule: rgb(236 234 223 / 4%);
+  --color-header-bg: rgb(20 21 15 / 92%);
+  --color-scrim: rgb(6 7 4 / 70%);
+
+  --focus-ring: 3px solid #b8f34a;
+  --color-link-underline: #b8f34a;
+  --shadow-panel: 0 22px 60px rgb(0 0 0 / 55%);
+
+  color-scheme: dark;
 }

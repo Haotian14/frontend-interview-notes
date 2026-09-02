@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { chapters } from '../content/chapters';
 import { chapterPath } from './paths';
+import ThemeToggle from '../features/theme/ThemeToggle';
 import RouteFocus from './RouteFocus';
 
 const SearchDialog = lazy(() => import('../features/search/SearchDialog'));
@@ -13,6 +14,9 @@ const primaryLinks = [
   { to: '/code', label: '代码手册' },
   { to: '/reference', label: '资料索引' },
 ];
+
+// 章节数字随目录增长，写死的「01—10」会和实际章节数脱节。
+const chapterLedgerLabel = `CHAPTER LEDGER / 01—${String(chapters.length).padStart(2, '0')}`;
 
 function ChapterLinks({ onNavigate }: { onNavigate?: () => void }) {
   return (
@@ -34,18 +38,53 @@ export default function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const searchTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLElement>(null);
 
+  const closeMenu = () => {
+    setMenuOpen(false);
+    menuTriggerRef.current?.focus();
+  };
+
+  // 抽屉是移动端唯一的导航入口，打开后要像对话框一样自足：
+  // Escape 关闭、Tab 循环留在抽屉内、背景不跟着滚。
   useEffect(() => {
     if (!menuOpen) return;
 
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setMenuOpen(false);
-      menuTriggerRef.current?.focus();
+    const focusables = () => [
+      ...(menuRef.current?.querySelectorAll<HTMLElement>('a[href], button') ?? []),
+    ];
+
+    focusables()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeMenu();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const items = focusables();
+      if (!items.length) return;
+
+      const current = items.indexOf(document.activeElement as HTMLElement);
+      const next = event.shiftKey
+        ? (current <= 0 ? items.length - 1 : current - 1)
+        : (current >= items.length - 1 ? 0 : current + 1);
+
+      event.preventDefault();
+      items[next]?.focus();
     };
 
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [menuOpen]);
 
   useEffect(() => {
@@ -89,6 +128,8 @@ export default function AppShell() {
           ))}
         </nav>
 
+        <ThemeToggle />
+
         <button
           ref={searchTriggerRef}
           type="button"
@@ -104,27 +145,50 @@ export default function AppShell() {
         <button
           ref={menuTriggerRef}
           type="button"
-          aria-label="打开章节菜单"
+          aria-label="打开导航菜单"
           aria-expanded={menuOpen}
-          aria-controls="mobile-chapter-menu"
+          aria-controls="mobile-menu"
           onClick={() => setMenuOpen(open => !open)}
         >
-          章节
+          菜单
         </button>
       </header>
 
       <aside className="chapter-sidebar">
-        <p>CHAPTER LEDGER / 01—10</p>
+        <p>{chapterLedgerLabel}</p>
         <nav aria-label="章节导航">
           <ChapterLinks />
         </nav>
       </aside>
 
       {menuOpen && (
-        <nav id="mobile-chapter-menu" aria-label="移动章节导航">
-          <p>CHAPTER LEDGER / 01—10</p>
-          <ChapterLinks onNavigate={() => setMenuOpen(false)} />
-        </nav>
+        <>
+          <div
+            className="mobile-menu-backdrop"
+            onClick={closeMenu}
+            aria-hidden="true"
+          />
+          {/*
+            移动端 header 里的主导航被媒体查询隐藏，所以抽屉必须同时承载
+            一级栏目和章节：少了前者，/interview、/code、/reference 在手机上
+            就没有任何入口。
+          */}
+          <nav ref={menuRef} id="mobile-menu" aria-label="移动导航">
+            <p>NAVIGATION</p>
+            <ul className="mobile-menu__primary">
+              {primaryLinks.map(link => (
+                <li key={link.to}>
+                  <NavLink to={link.to} onClick={() => setMenuOpen(false)}>
+                    {link.label}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+
+            <p>{chapterLedgerLabel}</p>
+            <ChapterLinks onNavigate={() => setMenuOpen(false)} />
+          </nav>
+        </>
       )}
 
       <RouteFocus />

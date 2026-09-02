@@ -1,3 +1,4 @@
+import { findPrerequisiteCycles } from './graph';
 import type { Chapter, TopicMeta, TopicPractice, ValidationIssue } from './types';
 
 /** 这些字段按纯文本渲染，写进 Markdown 语法只会原样显示出来。 */
@@ -54,6 +55,13 @@ export function validateContent(topics: TopicMeta[], chapters: Chapter[]): Valid
       }
     }
   }
+
+  // 前置关系成环就排不出学习顺序，/knowledge-map 只能把这些专题堆在最后一层。
+  const cyclic = findPrerequisiteCycles(topics);
+  if (cyclic.length) {
+    issues.push({ message: '前置专题构成环：' + cyclic.join(' → ') });
+  }
+
   return issues;
 }
 

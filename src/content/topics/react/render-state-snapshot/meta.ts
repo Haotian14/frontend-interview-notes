@@ -9,8 +9,8 @@ export const meta: TopicMeta = {
   level: '高频',
   minutes: 26,
   keywords: ['渲染快照', '批处理', '组件身份', '派生状态'],
-  prerequisites: ['type-narrowing'],
-  related: ['type-narrowing'],
+  prerequisites: ['closures-scope'],
+  related: ['hooks-dependencies', 'reconciliation-keys'],
   sources: [
     { label: 'React — State as a Snapshot', href: 'https://react.dev/learn/state-as-a-snapshot' },
     { label: 'React — Queueing a Series of State Updates', href: 'https://react.dev/learn/queueing-a-series-of-state-updates' },

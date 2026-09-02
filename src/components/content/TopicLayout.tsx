@@ -54,7 +54,12 @@ export default function TopicLayout({
             <ReadToggle slug={topic.slug} />
           </header>
 
-          <ContentCallout title="一句话结论" variant="conclusion">
+          {/*
+            这句来自 practice.ts 的 interview.answer，是面试时可以直接说出口的
+            版本；正文的「一句话结论」小节是同一结论的展开。两者并排时用不同
+            标题区分，否则读者会以为同一段话被重复了两遍。
+          */}
+          <ContentCallout title="面试可用结论" variant="conclusion">
             <p>{conclusion}</p>
           </ContentCallout>
 

@@ -3,16 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#171914" />
+    <meta name="theme-color" content="#f3f0e7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14150f" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="从基础原理到面试表达，一本完整、可检索的前端复习手册。" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+    <meta property="og:type" content="website" />
     <meta property="og:title" content="前端复习手册 · Frontend Review" />
     <meta property="og:description" content="建立知识体系，也练习如何把它讲清楚。" />
     <meta property="og:image" content="/og.webp" />
     <meta name="twitter:card" content="summary_large_image" />
     <title>前端复习手册 · Frontend Review</title>
+    <script>
+      /*
+        在首次绘制前把主题写到 <html data-theme> 上，否则「系统浅色 + 手动选深色」
+        的读者会先看到一帧浅色。键名必须和 features/theme/themeStore.ts 保持一致。
+        这是 index.html 被列入 localStorage 允许名单的唯一原因。
+      */
+      (function () {
+        try {
+          var choice = window.localStorage.getItem('handbook:theme:v1');
+          if (choice === 'dark' || choice === 'light') {
+            document.documentElement.dataset.theme = choice;
+          }
+        } catch (error) {
+          /* 隐私模式下读取会抛异常：跟随系统即可。 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

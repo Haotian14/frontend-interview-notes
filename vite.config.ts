@@ -10,24 +10,31 @@ import rehypePrettyCode from 'rehype-pretty-code';
 import { configDefaults } from 'vitest/config';
 // @ts-expect-error 构建脚本是 .mjs，没有类型声明。
 import { writeSearchIndex } from './scripts/build-search-index.mjs';
+// @ts-expect-error 构建脚本是 .mjs，没有类型声明。
+import { writeInterviewIndex } from './scripts/build-interview-index.mjs';
 
 process.env.WRANGLER_WRITE_LOGS ??= 'false';
 process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
 process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
 
 /**
- * 正文检索索引由 article.mdx 生成。放进 buildStart 而不是单独的 npm 脚本，
- * 是为了让 dev、test 和 build 三条路径拿到的索引永远和当前正文一致。
+ * 检索索引和追问题库都由 article.mdx 生成。放进 buildStart 而不是单独的
+ * npm 脚本，是为了让 dev、test 和 build 三条路径拿到的产物永远和当前正文一致。
  */
-function searchIndexPlugin(): Plugin {
+function contentIndexPlugin(): Plugin {
+  const rebuild = () => {
+    writeSearchIndex();
+    writeInterviewIndex();
+  };
+
   return {
-    name: 'handbook-search-index',
+    name: 'handbook-content-index',
     buildStart() {
-      writeSearchIndex();
+      rebuild();
     },
     configureServer(server) {
       server.watcher.on('change', file => {
-        if (file.endsWith('article.mdx')) writeSearchIndex();
+        if (file.endsWith('article.mdx')) rebuild();
       });
     },
   };
@@ -52,7 +59,7 @@ export default defineConfig(({ isSsrBuild, mode }) => ({
           }),
         ]
       : []),
-    searchIndexPlugin(),
+    contentIndexPlugin(),
     mdx({
       providerImportSource: '@mdx-js/react',
       remarkPlugins: [remarkGfm],

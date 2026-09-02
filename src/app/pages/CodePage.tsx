@@ -1,43 +1,24 @@
 import { lazy, Suspense } from 'react';
-import { Link } from 'react-router-dom';
-import { chapters } from '../../content/chapters';
 import { getTopic, loadAllPractices } from '../../content/registry';
-import { topicPath } from '../paths';
 
-const chapterTitles = new Map(chapters.map(chapter => [chapter.id, chapter.title]));
+/*
+  条目数据和渲染条目的组件一起惰性加载。
 
-// 代码条目和面试答案一样只服务这一个页面，按需加载。
+  路由表静态导入所有页面（见 routes.tsx），页面模块顶层 import 什么，什么就
+  进首屏包——CodeCatalog 用到的 FilterBar 也一样。所以这里连组件模块一起
+  动态取，首屏只留这层壳。
+*/
 const CodeList = lazy(async () => {
-  const entries = (await loadAllPractices())
-    .filter(practice => practice.code)
-    .map(practice => ({ practice, topic: getTopic(practice.slug)! }));
+  const [{ default: CodeCatalog }, practices] = await Promise.all([
+    import('./CodeCatalog'),
+    loadAllPractices(),
+  ]);
 
-  return {
-    default: () => (
-      <ul>
-        {entries.map(({ practice, topic }) => (
-          <li key={topic.slug}>
-            <article>
-              <p>{chapterTitles.get(topic.chapter) ?? topic.chapter} · {topic.level}</p>
-              <h2>{topic.title}</h2>
-              <p>{topic.summary}</p>
-              <dl>
-                <div>
-                  <dt>预期输入</dt>
-                  <dd>{practice.code!.input}</dd>
-                </div>
-                <div>
-                  <dt>预期输出</dt>
-                  <dd>{practice.code!.output}</dd>
-                </div>
-              </dl>
-              <Link to={topicPath(topic)}>打开「{topic.title}」完整专题</Link>
-            </article>
-          </li>
-        ))}
-      </ul>
-    ),
-  };
+  const entries = practices
+    .filter(practice => practice.code)
+    .map(practice => ({ topic: getTopic(practice.slug)!, code: practice.code! }));
+
+  return { default: () => <CodeCatalog entries={entries} /> };
 });
 
 export default function CodePage() {

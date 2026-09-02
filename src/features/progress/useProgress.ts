@@ -2,12 +2,13 @@ import { useCallback, useSyncExternalStore } from 'react';
 import {
   clearProgress,
   readProgress,
+  toggleMastered,
   toggleRead,
   writeProgress,
 } from './progressStore';
 import type { ProgressState } from './progressStore';
 
-const EMPTY: ProgressState = { read: [] };
+const EMPTY: ProgressState = { read: [], mastered: [] };
 
 /**
  * 进度是组件树之外的状态（浏览器本地存储），因此用 useSyncExternalStore 订阅，
@@ -57,10 +58,28 @@ export function useProgress() {
     emit();
   }, []);
 
+  const toggleMaster = useCallback((id: string) => {
+    writeProgress(toggleMastered(readProgress(), id));
+    emit();
+  }, []);
+
   const isRead = useCallback(
     (slug: string) => state.read.includes(slug),
     [state],
   );
 
-  return { readSlugs: state.read, isRead, toggle, reset };
+  const isMastered = useCallback(
+    (id: string) => state.mastered.includes(id),
+    [state],
+  );
+
+  return {
+    readSlugs: state.read,
+    masteredIds: state.mastered,
+    isRead,
+    isMastered,
+    toggle,
+    toggleMaster,
+    reset,
+  };
 }

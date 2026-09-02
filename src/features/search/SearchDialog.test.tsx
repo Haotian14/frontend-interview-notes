@@ -4,7 +4,9 @@ import { RouterProvider } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { createTestRouter } from '../../app/router';
 import { topicPath } from '../../app/paths';
-import { searchTopics } from './searchIndex';
+import { loadSearchSections, searchTopics } from './searchIndex';
+
+const sections = await loadSearchSections();
 
 function renderApp() {
   const router = createTestRouter(['/']);
@@ -49,8 +51,14 @@ describe('SearchDialog', () => {
     const input = await screen.findByRole('combobox', { name: '搜索知识点' });
     await user.type(input, '渲染');
 
-    const results = searchTopics('渲染');
+    const results = searchTopics('渲染', sections);
     expect(results.length).toBeGreaterThan(1);
+
+    // 正文索引异步到达，等结果稳定到含正文命中的那一版再操作。
+    await waitFor(() => {
+      expect(screen.getAllByRole('option')).toHaveLength(results.length);
+    });
+
     const firstId = input.getAttribute('aria-activedescendant');
 
     await user.keyboard('{ArrowDown}');

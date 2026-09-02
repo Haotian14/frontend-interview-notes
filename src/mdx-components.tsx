@@ -58,10 +58,12 @@ function MdxAnchor({
   return <Link to={resolved}>{children}</Link>;
 }
 
-function MdxDocumentTitle({
-  children,
-}: ComponentPropsWithoutRef<'h1'>) {
-  return <p className="topic-content__document-title">{children}</p>;
+/*
+  正文的 h1 和页面标题是同一句话。以前把它降级成一行小字渲染在结论卡片下面，
+  屏幕上就多出一个没有归属的重复标题；这里直接丢弃，标题只由 TopicLayout 出。
+*/
+function MdxDocumentTitle() {
+  return null;
 }
 
 function MdxPre({

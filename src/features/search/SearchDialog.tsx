@@ -3,7 +3,8 @@ import type { KeyboardEvent, RefObject } from 'react';
 import { Link } from 'react-router-dom';
 import { topicPath } from '../../app/paths';
 import HighlightText from './HighlightText';
-import { searchTopics } from './searchIndex';
+import { loadSearchSections, searchTopics } from './searchIndex';
+import type { SearchSection } from './searchIndex';
 
 // 挂载即代表打开：AppShell 用条件渲染控制生命周期，这里不再重复一个 open 开关。
 type SearchDialogProps = {
@@ -17,15 +18,27 @@ export default function SearchDialog({
 }: SearchDialogProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  // 正文索引单独成片、异步到达：先用元数据结果开工，索引到位后再补正文命中。
+  const [sections, setSections] = useState<SearchSection[]>([]);
   const dialogRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
-  const results = useMemo(() => searchTopics(query), [query]);
+  const results = useMemo(() => searchTopics(query, sections), [query, sections]);
   const activeResult = results[activeIndex];
   const activeId = activeResult ? `search-result-${activeResult.item.slug}` : undefined;
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadSearchSections()
+      .then(loaded => { if (active) setSections(loaded); })
+      // 索引取不到时降级为只搜标题和关键词，而不是让搜索整个不可用。
+      .catch(() => {});
+
+    return () => { active = false; };
   }, []);
 
   const closeAndRestore = () => {

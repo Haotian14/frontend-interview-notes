@@ -68,18 +68,25 @@ test('starts the interview timer and reveals the reference answer', async ({ pag
   }).toPass();
 });
 
-test('opens and closes the chapter drawer at a mobile viewport', async ({ page }) => {
+test('opens and closes the navigation drawer at a mobile viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
-  const trigger = page.getByRole('button', { name: '打开章节菜单' });
+  const trigger = page.getByRole('button', { name: '打开导航菜单' });
   await expect(trigger).toBeVisible();
   await trigger.click();
-  await expect(page.getByRole('navigation', { name: '移动章节导航' })).toBeVisible();
+
+  const drawer = page.getByRole('navigation', { name: '移动导航' });
+  await expect(drawer).toBeVisible();
+
+  // 一级栏目在手机上只有抽屉这一个入口，必须真的可见可点。
+  for (const label of ['面试题库', '代码手册', '资料索引', '知识地图']) {
+    await expect(drawer.getByRole('link', { name: label })).toBeVisible();
+  }
 
   await page.keyboard.press('Escape');
 
-  await expect(page.getByRole('navigation', { name: '移动章节导航' })).toBeHidden();
+  await expect(drawer).toBeHidden();
   await expect(trigger).toBeFocused();
 });
 
