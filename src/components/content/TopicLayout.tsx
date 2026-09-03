@@ -44,11 +44,11 @@ export default function TopicLayout({
       <div className="topic-reader">
         <div className="topic-reader__main">
           <header className="topic-header">
-            <p>{chapter?.title ?? topic.chapter}</p>
+            <p className="page-eyebrow">{chapter?.title ?? topic.chapter}</p>
             <h1 ref={headingRef} tabIndex={-1}>{topic.title}</h1>
-            <p>{topic.summary}</p>
-            <p>{topic.level} · {topic.minutes} 分钟</p>
-            <ul aria-label="关键词">
+            <p className="page-lead">{topic.summary}</p>
+            <p className="topic-header__meta">{topic.level} · {topic.minutes} 分钟</p>
+            <ul className="tag-list" aria-label="关键词">
               {topic.keywords.map(keyword => <li key={keyword}>{keyword}</li>)}
             </ul>
             <ReadToggle slug={topic.slug} />

@@ -19,10 +19,10 @@ const ReferenceTables = lazy(async () => {
 export default function ReferencePage() {
   return (
     <div className="reference-page">
-      <header>
-        <p>QUICK / REFERENCE</p>
+      <header className="page-header">
+        <p className="page-eyebrow">QUICK / REFERENCE</p>
         <h1 tabIndex={-1}>前端速查表</h1>
-        <p>用于面试前快速唤醒概念；每一张表都来自包含机制、边界和证据的完整专题。</p>
+        <p className="page-lead">用于面试前快速唤醒概念；每一张表都来自包含机制、边界和证据的完整专题。</p>
       </header>
 
       <Suspense fallback={<p role="status">正在加载速查表…</p>}>

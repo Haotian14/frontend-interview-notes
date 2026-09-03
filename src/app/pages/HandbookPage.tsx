@@ -10,10 +10,10 @@ export default function HandbookPage() {
 
   return (
     <div className="handbook-page">
-      <header>
-        <p>HANDBOOK / INDEX</p>
+      <header className="page-header">
+        <p className="page-eyebrow">HANDBOOK / INDEX</p>
         <h1 tabIndex={-1}>完整手册目录</h1>
-        <p>十一个章节构成从基础机制到工程决策的复习主干。</p>
+        <p className="page-lead">十一个章节构成从基础机制到工程决策的复习主干。</p>
         <p className="handbook-progress" aria-live="polite">
           已读完 {done} / {topics.length} 篇
           {done > 0 && (

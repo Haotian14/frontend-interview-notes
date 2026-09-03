@@ -139,7 +139,7 @@ export default function AppShell() {
           onClick={() => setSearchOpen(true)}
         >
           搜索
-          <span aria-hidden="true"> /</span>
+          <kbd className="kbd-hint" aria-hidden="true">/</kbd>
         </button>
 
         <button

@@ -1,4 +1,7 @@
 /*
+ * 设计语言：参考 openai.com 的排版与用色——近乎单色的中性面板、克制的圆角、
+ * 大量留白，强调靠字号与间距而不是色块和硬边框。
+ *
  * 浅色是基准调色板，深色只覆盖颜色令牌，尺寸与字体在两套主题里共用。
  *
  * 深色规则写两遍是有意的：
@@ -9,96 +12,165 @@
  */
 
 :root {
-  --color-paper: #f3f0e7;
-  --color-surface: #fbfaf5;
-  --color-surface-strong: #ffffff;
-  --color-ink: #171914;
-  --color-muted: #666a60;
-  --color-line: #d7d4c9;
-  --color-line-strong: #aaa99f;
-  --color-accent: #b8f34a;
-  --color-accent-ink: #172006;
-  --color-blue-soft: #e5edff;
-  --color-blue-ink: #244d86;
-  --color-danger-soft: #ffe7dc;
-  --color-danger-ink: #7a2f13;
+  /* 表面：canvas 是页面底色，surface 是卡片/侧栏，raised 是浮层。 */
+  --color-canvas: #ffffff;
+  --color-surface: #f7f7f8;
+  --color-surface-strong: #f0f0f2;
+  --color-raised: #ffffff;
 
-  /* 纸张横纹、吸顶头部的半透明底色、以及弹层遮罩。 */
-  --color-rule: rgb(23 25 20 / 3%);
-  --color-header-bg: rgb(243 240 231 / 94%);
-  --color-scrim: rgb(23 25 20 / 55%);
+  /* 文字：三级灰阶就够，超过三级会让页面显得脏。 */
+  --color-ink: #0d0d0d;
+  --color-ink-soft: #35353b;
+  --color-muted: #6b6b75;
+  --color-faint: #757580;
+
+  /* 描边：默认极浅，strong 只用在需要真正分隔的地方。 */
+  --color-line: #e8e8ec;
+  --color-line-strong: #d3d3da;
+  /* 按钮和输入框的描边要满足 WCAG 2.2 非文本 3:1，比卡片描边深一档。 */
+  --color-control-border: #8f8f99;
+
+  /* 主按钮是实心近黑，这是这套语言里唯一的「重」元素。 */
+  --color-accent: #0d0d0d;
+  --color-accent-ink: #ffffff;
+
+  /* 品牌绿只出现在高亮、已读标记这类小面积场景。 */
+  --color-brand: #0b7f63;
+  --color-brand-soft: #e7f4f0;
+  --color-mark: #cdeee2;
+
+  --color-danger-ink: #9b2c1f;
+
+  --color-header-bg: rgb(255 255 255 / 78%);
+  --color-scrim: rgb(13 13 13 / 45%);
+  --color-hover: rgb(13 13 13 / 4%);
+  --color-hover-strong: rgb(13 13 13 / 7%);
+
+  --color-code-bg: #0d0d0d;
+  --color-code-ink: #ececf1;
+  --color-code-line: #2a2a2e;
+  --color-code-muted: #8e8ea0;
+
+  --focus-ring-color: #0d0d0d;
+  --focus-ring: 2px solid var(--focus-ring-color);
+  --color-link-underline: var(--color-line-strong);
 
   --content-width: 760px;
-  /* 原先的 #76a91e 对纸张只有 2.47:1，达不到 WCAG 2.2 非文本 3:1。 */
-  --focus-ring: 3px solid #527714;
-  --color-link-underline: #527714;
-  --font-body: 'Noto Sans SC Variable', system-ui, sans-serif;
-  --font-mono: 'DM Mono', ui-monospace, monospace;
-  --shadow-panel: 0 22px 60px rgb(34 35 29 / 10%);
-  --radius-small: 4px;
-  --radius-medium: 10px;
-  --space-1: 0.25rem;
+  --page-width: 1200px;
+
+  /*
+    正文优先用系统的中性无衬线体（SF Pro / Segoe UI / Roboto），它们和
+    OpenAI Sans 一样是新格罗特斯克；中文再回落到 Noto Sans SC。
+  */
+  --font-body:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, 'Noto Sans SC Variable', sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 阴影只做「浮起来一点」，不做投影效果。 */
+  --shadow-soft: 0 1px 2px rgb(13 13 13 / 4%), 0 8px 24px rgb(13 13 13 / 6%);
+  --shadow-panel: 0 12px 48px rgb(13 13 13 / 12%), 0 2px 8px rgb(13 13 13 / 6%);
+
+  --radius-xs: 6px;
+  --radius-small: 10px;
+  --radius-medium: 16px;
+  --radius-large: 24px;
+  --radius-pill: 999px;
+
   --space-2: 0.5rem;
   --space-3: 0.75rem;
-  --space-4: 1rem;
   --space-5: 1.5rem;
-  --space-6: 2rem;
-  --space-7: 3rem;
   --space-8: 4.5rem;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
 
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --color-paper: #14150f;
-    --color-surface: #1c1e17;
-    --color-surface-strong: #24261e;
-    --color-ink: #eceadf;
-    --color-muted: #a2a496;
-    --color-line: #33362c;
-    --color-line-strong: #6b6f5f;
-    --color-accent: #b8f34a;
-    --color-accent-ink: #172006;
-    --color-blue-soft: #1b2a44;
-    --color-blue-ink: #a8c6f0;
-    --color-danger-soft: #3a1d10;
-    --color-danger-ink: #ffb495;
+    --color-canvas: #0d0d0d;
+    --color-surface: #171719;
+    --color-surface-strong: #202024;
+    --color-raised: #1b1b1e;
 
-    --color-rule: rgb(236 234 223 / 4%);
-    --color-header-bg: rgb(20 21 15 / 92%);
-    --color-scrim: rgb(6 7 4 / 70%);
+    --color-ink: #f3f3f4;
+    --color-ink-soft: #d5d5da;
+    --color-muted: #a1a1ab;
+    --color-faint: #8e8e99;
 
-    --focus-ring: 3px solid #b8f34a;
-    --color-link-underline: #b8f34a;
-    --shadow-panel: 0 22px 60px rgb(0 0 0 / 55%);
+    --color-line: #2a2a2e;
+    --color-line-strong: #3d3d44;
+    --color-control-border: #6d6d78;
+
+    --color-accent: #f3f3f4;
+    --color-accent-ink: #0d0d0d;
+
+    --color-brand: #4fd1ac;
+    --color-brand-soft: #14332c;
+    --color-mark: #1d4b40;
+
+    --color-danger-ink: #ff9f8f;
+
+    --color-header-bg: rgb(13 13 13 / 76%);
+    --color-scrim: rgb(0 0 0 / 62%);
+    --color-hover: rgb(243 243 244 / 6%);
+    --color-hover-strong: rgb(243 243 244 / 10%);
+
+    --color-code-bg: #171719;
+    --color-code-ink: #ececf1;
+    --color-code-line: #2f2f35;
+    --color-code-muted: #8e8ea0;
+
+    --focus-ring-color: #f3f3f4;
+    --color-link-underline: var(--color-line-strong);
+
+    --shadow-soft: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 32%);
+    --shadow-panel: 0 12px 48px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 40%);
 
     color-scheme: dark;
   }
 }
 
 :root[data-theme='dark'] {
-  --color-paper: #14150f;
-  --color-surface: #1c1e17;
-  --color-surface-strong: #24261e;
-  --color-ink: #eceadf;
-  --color-muted: #a2a496;
-  --color-line: #33362c;
-  --color-line-strong: #6b6f5f;
-  --color-accent: #b8f34a;
-  --color-accent-ink: #172006;
-  --color-blue-soft: #1b2a44;
-  --color-blue-ink: #a8c6f0;
-  --color-danger-soft: #3a1d10;
-  --color-danger-ink: #ffb495;
+  --color-canvas: #0d0d0d;
+  --color-surface: #171719;
+  --color-surface-strong: #202024;
+  --color-raised: #1b1b1e;
 
-  --color-rule: rgb(236 234 223 / 4%);
-  --color-header-bg: rgb(20 21 15 / 92%);
-  --color-scrim: rgb(6 7 4 / 70%);
+  --color-ink: #f3f3f4;
+  --color-ink-soft: #d5d5da;
+  --color-muted: #a1a1ab;
+  --color-faint: #8e8e99;
 
-  --focus-ring: 3px solid #b8f34a;
-  --color-link-underline: #b8f34a;
-  --shadow-panel: 0 22px 60px rgb(0 0 0 / 55%);
+  --color-line: #2a2a2e;
+  --color-line-strong: #3d3d44;
+  --color-control-border: #6d6d78;
+
+  --color-accent: #f3f3f4;
+  --color-accent-ink: #0d0d0d;
+
+  --color-brand: #4fd1ac;
+  --color-brand-soft: #14332c;
+  --color-mark: #1d4b40;
+
+  --color-danger-ink: #ff9f8f;
+
+  --color-header-bg: rgb(13 13 13 / 76%);
+  --color-scrim: rgb(0 0 0 / 62%);
+  --color-hover: rgb(243 243 244 / 6%);
+  --color-hover-strong: rgb(243 243 244 / 10%);
+
+  --color-code-bg: #171719;
+  --color-code-ink: #ececf1;
+  --color-code-line: #2f2f35;
+  --color-code-muted: #8e8ea0;
+
+  --focus-ring-color: #f3f3f4;
+  --color-link-underline: var(--color-line-strong);
+
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 32%);
+  --shadow-panel: 0 12px 48px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 40%);
 
   color-scheme: dark;
 }

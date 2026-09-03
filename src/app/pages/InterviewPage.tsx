@@ -27,10 +27,10 @@ const InterviewDeckLoader = lazy(async () => {
 export default function InterviewPage() {
   return (
     <div className="interview-page">
-      <header>
-        <p>INTERVIEW / TRANSIENT PRACTICE</p>
+      <header className="page-header">
+        <p className="page-eyebrow">INTERVIEW / TRANSIENT PRACTICE</p>
         <h1 tabIndex={-1}>面试训练场</h1>
-        <p>先独立组织答案，再展开参考结构；筛选和计时保留在本次页面会话中，掌握度记录在本机。</p>
+        <p className="page-lead">先独立组织答案，再展开参考结构；筛选和计时保留在本次页面会话中，掌握度记录在本机。</p>
       </header>
       <Suspense fallback={<p role="status">正在加载题库…</p>}>
         <InterviewDeckLoader />

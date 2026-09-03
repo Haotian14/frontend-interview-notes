@@ -57,10 +57,10 @@ export default function KnowledgeMapView() {
 
   return (
     <div className="knowledge-map-page">
-      <header>
-        <p>KNOWLEDGE / MAP</p>
+      <header className="page-header">
+        <p className="page-eyebrow">KNOWLEDGE / MAP</p>
         <h1 tabIndex={-1}>知识地图</h1>
-        <p>
+        <p className="page-lead">
           按 meta 里声明的前置关系把 {topics.length} 篇专题排成学习顺序，
           并给出每篇的前置、支撑与关联邻居。
         </p>
