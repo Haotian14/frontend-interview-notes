@@ -1,117 +1,106 @@
+/* ===============================================================
+   专题页：面包屑、标题组、正文排版、目录
+   =============================================================== */
+
 .topic-page > nav ol {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 0.75rem;
+  gap: 0.4rem 0.6rem;
   padding: 0;
   color: var(--color-muted);
   font-size: 0.82rem;
   list-style: none;
 }
 
+.topic-page > nav a {
+  text-decoration: none;
+}
+
+.topic-page > nav a:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
 .topic-page > nav li:not(:last-child)::after {
-  margin-left: 0.75rem;
+  margin-left: 0.6rem;
+  color: var(--color-faint);
   content: "/";
 }
 
 .topic-header {
   padding-bottom: 2rem;
-  border-bottom: 1px solid var(--color-ink);
-}
-
-.topic-header > p:first-child,
-.home-page header > p:first-child,
-.handbook-page > header > p:first-child,
-.chapter-page > header > p:first-child,
-.knowledge-map-page > header > p:first-child,
-.interview-page > header > p:first-child,
-.code-page > header > p:first-child,
-.reference-page > header > p:first-child,
-.not-found-page > p:first-child {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  border-bottom: 1px solid var(--color-line);
 }
 
 .topic-header h1 {
-  max-width: 16ch;
-  margin-block: 0.75rem 1rem;
-  font-size: clamp(2.25rem, 6vw, 4.5rem);
-  letter-spacing: -0.055em;
+  max-width: 18ch;
+  margin-block: 0.8rem 1rem;
+  font-size: clamp(2.1rem, 4.5vw, 3.4rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
-.topic-header > p:nth-of-type(2) {
-  max-width: 52ch;
-  color: var(--color-muted);
-  font-size: 1.08rem;
-}
-
-.topic-header > p:nth-of-type(3) {
+.topic-header__meta {
   display: inline-flex;
+  align-items: center;
   margin-top: 1.25rem;
-  padding: 0.3rem 0.55rem;
-  color: var(--color-accent-ink);
-  background: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.topic-header ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0;
-  margin-top: 1rem;
-  list-style: none;
-}
-
-.topic-header li {
-  padding: 0.2rem 0.55rem;
-  border: 1px solid var(--color-line);
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-pill);
   color: var(--color-muted);
+  background: var(--color-surface-strong);
   font-size: 0.78rem;
 }
 
+/* 「面试可用结论」这类提要块：浅底 + 圆角，靠留白而不是硬边框立住。 */
 .content-callout {
-  margin-block: 2rem;
-  padding: 1.25rem 1.4rem;
-  border: 1px solid var(--color-ink);
-  box-shadow: 6px 6px 0 var(--color-ink);
+  margin-block: 2.25rem;
+  padding: 1.35rem 1.5rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-medium);
+  background: var(--color-surface);
 }
 
 .content-callout--conclusion {
-  color: var(--color-accent-ink);
-  background: var(--color-accent);
+  border-color: transparent;
+  color: var(--color-ink);
+  background: var(--color-brand-soft);
 }
 
 .content-callout > strong {
   display: block;
   margin-bottom: 0.5rem;
+  color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
+  font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+.content-callout--conclusion > strong {
+  color: var(--color-brand);
+}
+
 .topic-content {
   max-width: var(--content-width);
-  font-size: 1.02rem;
-  line-height: 1.82;
+  color: var(--color-ink-soft);
+  font-size: 1.05rem;
+  line-height: 1.78;
 }
 
 .topic-content h2 {
   margin-top: 3.5rem;
-  padding-top: 0.65rem;
-  border-top: 1px solid var(--color-ink);
-  font-size: clamp(1.55rem, 3vw, 2rem);
+  color: var(--color-ink);
+  font-size: clamp(1.45rem, 2.6vw, 1.85rem);
+  font-weight: 600;
+  letter-spacing: -0.024em;
 }
 
 .topic-content h3 {
-  margin-top: 2rem;
-  font-size: 1.2rem;
+  margin-top: 2.25rem;
+  color: var(--color-ink);
+  font-size: 1.15rem;
+  font-weight: 550;
 }
 
 .topic-content p,
@@ -120,37 +109,55 @@
 .topic-content blockquote,
 .topic-content .mdx-code-block,
 .topic-content .table-scroll {
-  margin-top: 1rem;
+  margin-top: 1.1rem;
 }
 
 .topic-content ul,
 .topic-content ol {
-  padding-left: 1.4rem;
+  padding-left: 1.35rem;
 }
 
 .topic-content li + li {
   margin-top: 0.35rem;
 }
 
+.topic-content strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
 .topic-content a {
-  font-weight: 650;
-  text-decoration-color: var(--color-link-underline);
+  color: var(--color-ink);
+  font-weight: 500;
+  text-decoration-color: var(--color-line-strong);
+}
+
+.topic-content :not(pre) > code {
+  padding: 0.12em 0.38em;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-strong);
+  font-size: 0.9em;
 }
 
 .content-quote {
-  padding: 1rem 1.25rem;
-  border-left: 4px solid var(--color-accent);
+  padding: 1.1rem 1.35rem;
+  border-left: 2px solid var(--color-line-strong);
+  border-radius: 0 var(--radius-small) var(--radius-small) 0;
   background: var(--color-surface);
-  font-size: 1.05rem;
+  font-size: 1.02rem;
 }
+
+/* ===============================================================
+   代码块与表格
+   =============================================================== */
 
 .mdx-code-block {
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid #2c3027;
-  border-radius: var(--radius-small);
-  color: #f6f5ef;
-  background: #191b17;
+  border: 1px solid var(--color-code-line);
+  border-radius: var(--radius-medium);
+  color: var(--color-code-ink);
+  background: var(--color-code-bg);
 }
 
 .mdx-code-block__toolbar {
@@ -158,19 +165,19 @@
   justify-content: space-between;
   align-items: center;
   min-height: 44px;
-  padding-inline: 0.8rem;
-  border-bottom: 1px solid #42473b;
-  color: #b7bbae;
+  padding-inline: 0.9rem;
+  border-bottom: 1px solid var(--color-code-line);
+  color: var(--color-code-muted);
   font-family: var(--font-mono);
   font-size: 0.72rem;
 }
 
 .mdx-code-block pre {
   max-width: 100%;
-  padding: 1rem;
+  padding: 1.1rem;
   overflow-x: auto;
-  font-size: 0.86rem;
-  line-height: 1.65;
+  font-size: 0.85rem;
+  line-height: 1.7;
   tab-size: 2;
 }
 
@@ -178,53 +185,78 @@
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--color-line);
+  border-radius: var(--radius-medium);
 }
 
 table {
   width: 100%;
   min-width: 560px;
   border-collapse: collapse;
-  background: var(--color-surface);
+  background: var(--color-canvas);
   font-size: 0.9rem;
 }
 
 caption {
-  padding: 0.9rem 1rem;
+  padding: 0.95rem 1.15rem;
+  border-bottom: 1px solid var(--color-line);
   color: var(--color-ink);
-  background: var(--color-accent);
-  font-weight: 800;
+  background: var(--color-surface);
+  font-weight: 550;
   text-align: left;
 }
 
 th,
 td {
-  padding: 0.8rem 1rem;
+  padding: 0.8rem 1.15rem;
   border-bottom: 1px solid var(--color-line);
   text-align: left;
   vertical-align: top;
 }
 
+tbody tr:last-child th,
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 thead th {
+  color: var(--color-faint);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
+tbody th {
+  color: var(--color-ink);
+  font-weight: 550;
+}
+
+tbody td {
+  color: var(--color-muted);
+}
+
+/* ===============================================================
+   正文页脚：官方资料与相邻专题
+   =============================================================== */
+
 .topic-reader__main > section[aria-labelledby="topic-sources"] {
   margin-top: 3.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--color-ink);
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--color-line);
 }
 
 .topic-reader__main > section[aria-labelledby="topic-sources"] h2,
 .topic-connections h2 {
-  font-size: 1.2rem;
+  font-size: 1.15rem;
+  font-weight: 550;
 }
 
 .topic-reader__main > section[aria-labelledby="topic-sources"] ul {
-  padding-left: 1.2rem;
-  margin-top: 0.75rem;
+  padding-left: 1.1rem;
+  margin-top: 0.85rem;
+  color: var(--color-muted);
+  font-size: 0.92rem;
 }
 
 .external-link-suffix {
@@ -232,25 +264,27 @@ thead th {
 }
 
 .topic-toc {
-  padding-left: 1rem;
+  padding-left: 1.1rem;
   border-left: 1px solid var(--color-line);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
 }
 
 .topic-toc > strong {
+  color: var(--color-faint);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
 }
 
 .topic-toc ol {
   padding: 0;
-  margin-top: 0.75rem;
+  margin-top: 0.9rem;
   list-style: none;
 }
 
 .topic-toc li + li {
-  margin-top: 0.5rem;
+  margin-top: 0.55rem;
 }
 
 .topic-toc li[data-level="3"] {
@@ -262,9 +296,13 @@ thead th {
   text-decoration: none;
 }
 
+.topic-toc a:hover {
+  color: var(--color-ink);
+}
+
 .topic-toc a[aria-current="location"] {
   color: var(--color-ink);
-  font-weight: 800;
+  font-weight: 550;
 }
 
 .topic-connections {
@@ -274,29 +312,40 @@ thead th {
 }
 
 .topic-connections nav:first-child {
-  padding: 1.25rem;
+  padding: 1.35rem 1.5rem;
   border: 1px solid var(--color-line);
+  border-radius: var(--radius-medium);
   background: var(--color-surface);
 }
 
 .topic-connections nav:first-child ul {
-  padding-left: 1.2rem;
-  margin-top: 0.75rem;
+  padding-left: 1.1rem;
+  margin-top: 0.8rem;
+  color: var(--color-muted);
+  font-size: 0.92rem;
 }
 
 .topic-connections nav[aria-label="相邻专题"] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 0.9rem;
 }
 
 .topic-connections nav[aria-label="相邻专题"] a {
   display: flex;
   flex-direction: column;
-  min-height: 100px;
-  padding: 1rem;
-  border: 1px solid var(--color-ink);
+  gap: 0.3rem;
+  min-height: 104px;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-medium);
   text-decoration: none;
+  transition: border-color 0.18s var(--ease), background-color 0.18s var(--ease);
+}
+
+.topic-connections nav[aria-label="相邻专题"] a:hover {
+  border-color: var(--color-line-strong);
+  background: var(--color-surface);
 }
 
 .topic-connections nav[aria-label="相邻专题"] a:last-child {
@@ -305,7 +354,7 @@ thead th {
 
 @media (max-width: 500px) {
   .topic-header h1 {
-    font-size: 2.5rem;
+    font-size: 2.1rem;
   }
 
   .topic-content {
@@ -319,4 +368,18 @@ thead th {
   .topic-connections nav[aria-label="相邻专题"] {
     grid-template-columns: 1fr;
   }
+}
+
+.topic-connections nav[aria-label="相邻专题"] span {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.topic-connections nav[aria-label="相邻专题"] strong {
+  font-size: 0.98rem;
+  font-weight: 550;
+  line-height: 1.4;
 }

@@ -18,10 +18,10 @@ export default function ChapterPage() {
 
   return (
     <div className="chapter-page">
-      <header>
-        <p>CHAPTER / {String(chapter.index).padStart(2, '0')}</p>
+      <header className="page-header">
+        <p className="page-eyebrow">CHAPTER / {String(chapter.index).padStart(2, '0')}</p>
         <h1 tabIndex={-1}>{chapter.title}</h1>
-        <p>{chapter.summary}</p>
+        <p className="page-lead">{chapter.summary}</p>
       </header>
 
       <section aria-labelledby="chapter-goals">
@@ -50,7 +50,7 @@ export default function ChapterPage() {
         )}
       </section>
 
-      <Link to="/handbook">返回完整目录</Link>
+      <Link className="button" to="/handbook">返回完整目录</Link>
     </div>
   );
 }

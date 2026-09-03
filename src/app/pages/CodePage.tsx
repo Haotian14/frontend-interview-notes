@@ -24,10 +24,10 @@ const CodeList = lazy(async () => {
 export default function CodePage() {
   return (
     <div className="code-page">
-      <header>
-        <p>CODE / MINIMAL VERIFICATION</p>
+      <header className="page-header">
+        <p className="page-eyebrow">CODE / MINIMAL VERIFICATION</p>
         <h1 tabIndex={-1}>代码手册</h1>
-        <p>这里索引能验证核心机制的最小示例，不在浏览器中执行任意代码。</p>
+        <p className="page-lead">这里索引能验证核心机制的最小示例，不在浏览器中执行任意代码。</p>
       </header>
 
       <Suspense fallback={<p role="status">正在加载代码条目…</p>}>

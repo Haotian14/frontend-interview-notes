@@ -7,7 +7,7 @@ import tokens from './tokens.css?raw';
 describe('V2 style contract', () => {
   test('defines stable reading tokens', () => {
     for (const token of [
-      '--color-paper',
+      '--color-canvas',
       '--color-ink',
       '--color-accent',
       '--content-width',
@@ -42,14 +42,20 @@ describe('V2 style contract', () => {
     expect(tokens).toContain(":root:not([data-theme='light'])");
     expect(tokens).toContain(":root[data-theme='dark']");
 
-    for (const token of ['--color-paper', '--color-ink', '--color-muted', '--focus-ring']) {
+    for (const token of [
+      '--color-canvas',
+      '--color-ink',
+      '--color-muted',
+      '--focus-ring-color',
+    ]) {
       // 三处：浅色基准 + 两处深色覆盖。
       expect(tokens.split(token).length - 1).toBeGreaterThanOrEqual(3);
     }
   });
 
   test('paints themed surfaces from tokens rather than fixed colors', () => {
-    expect(base).toContain('var(--color-rule)');
+    expect(base).toContain('var(--color-canvas)');
+    expect(base).toContain('var(--color-ink)');
     expect(layout).toContain('var(--color-header-bg)');
     expect(layout).toContain('var(--color-scrim)');
   });
